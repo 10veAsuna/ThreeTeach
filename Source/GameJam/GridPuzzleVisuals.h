@@ -38,6 +38,7 @@ public:
 	void AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Material);
 	void UpdateBridgeStatus(const TArray<FString>& Labels, const TArray<bool>& Matches);
 	void AnimateOutro(float Strength);
+	void SetEchoAvailable(bool bAvailable, UMaterialInterface* Material);
 
 	UPROPERTY(BlueprintReadOnly, Category="Puzzle") FTileData TileData;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Look") FLinearColor MemoryStone = FLinearColor(.28f,.38f,.43f);
@@ -58,6 +59,8 @@ private:
 	UPROPERTY() TObjectPtr<UTextRenderComponent> MarkerText;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> BridgeReadout;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> ActionMarker;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoMarker;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoHalo;
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> BluePrints;
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> OrangePrints;
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Countdown;
@@ -70,6 +73,8 @@ private:
 	float DeckAngle = 0.f;
 	float DeckElapsed = 0.f;
 	float DeckDuration = 0.f;
+	float EchoTime = 0.f;
+	bool bEchoAvailable = false;
 };
 
 UCLASS(Blueprintable)
@@ -97,10 +102,16 @@ private:
 	UPROPERTY() TObjectPtr<USceneComponent> Figure;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Selection;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Shadow;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> ControlHalo;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> ControlDiamond;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> ControlPointer;
 	FVector From = FVector::ZeroVector;
 	FVector To = FVector::ZeroVector;
 	FVector Nudge = FVector::ZeroVector;
 	FVector CurveOffset = FVector::ZeroVector;
 	float Duration = 0.f;
 	float Elapsed = 0.f;
+	float BeaconTime = 0.f;
+	bool bIsControlled = false;
+	bool bIsFinished = false;
 };

@@ -82,6 +82,10 @@ namespace
 			[Text(LOCTEXT("Subtitle", "O N E   S T E P   F O R   Y O U"), 17, Muted, true)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,32)
 			[Text(LOCTEXT("Intro", "你无法走在自己留下的路上。\n所以，我把每一步都留给你。"), 20, Muted)]
+			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,22)
+			[Text(FText::Format(LOCTEXT("EchoProgress", "回响  {0} / {1}"),
+				FText::AsNumber(Manager.GetEarnedEchoCount()), FText::AsNumber(Manager.GetEchoTargetCount())),
+				16, Orange)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
 			[
 				SNew(SBox).WidthOverride(260).HAlign(HAlign_Fill)
@@ -128,6 +132,10 @@ namespace
 		TSharedRef<SVerticalBox> Body = SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,16)
 			[Text(LOCTEXT("Select", "选择关卡"), 38)]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,14)
+			[Text(FText::Format(LOCTEXT("EchoSelection", "已找到回响：{0} / {1}"),
+				FText::AsNumber(Manager.GetEarnedEchoCount()), FText::AsNumber(Manager.GetEchoTargetCount())),
+				16, Orange)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
 			[Text(LOCTEXT("MainChapters", "主线"), 18, Blue)]
 			+ SVerticalBox::Slot().AutoHeight()[Chapters];
@@ -250,7 +258,7 @@ namespace
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth()
-				[SNew(SBox).WidthOverride(140)[Text(MoveTemp(Label), 18, Blue)]]
+				[SNew(SBox).WidthOverride(175)[Text(MoveTemp(Label), 18, Blue)]]
 				+ SHorizontalBox::Slot()[Text(MoveTemp(Detail), 18, Ink)]
 			];
 		};
@@ -261,6 +269,33 @@ namespace
 
 		switch (Manager.GetScreen())
 		{
+		case EGridScreen::MechanicIntro:
+			Heading(LOCTEXT("NewMechanic", "本关新机制"));
+			Body->AddSlot().AutoHeight().Padding(0,0,0,10)
+			[
+				SNew(STextBlock).Font(Font(30,false)).ColorAndOpacity(Blue)
+				.Text(Manager.GetMechanicIntroTitle())
+			];
+			Body->AddSlot().AutoHeight().Padding(0,0,0,16)
+			[
+				SNew(SBox).WidthOverride(720)
+				[
+					SNew(STextBlock).Font(Font(19,false)).ColorAndOpacity(Ink)
+					.Text(Manager.GetMechanicIntroBody()).AutoWrapText(true)
+				]
+			];
+			Body->AddSlot().AutoHeight().Padding(16,12)
+			[
+				SNew(SBorder).BorderImage(&Fill)
+				.BorderBackgroundColor(FLinearColor(.025f,.07f,.09f,.95f))
+				[
+					SNew(STextBlock).Font(Font(17,false)).ColorAndOpacity(Muted)
+					.Text(Manager.GetMechanicIntroExample()).AutoWrapText(true)
+				]
+			];
+			Body->AddSlot().AutoHeight().Padding(0,16,0,0)
+			[Button(LOCTEXT("EnterLevel", "明白了，开始本关"), &Manager, &AGridManager::DismissMechanicIntro, true)];
+			break;
 		case EGridScreen::Controls:
 			Heading(LOCTEXT("ControlTitle", "操作说明"));
 			Row(LOCTEXT("Movement", "WASD / 方向键"), LOCTEXT("GridMovement", "每次移动一格"));
@@ -270,7 +305,19 @@ namespace
 			Row(LOCTEXT("ResetKey", "R"), LOCTEXT("ResetHelp", "重置本关"));
 			Row(LOCTEXT("PauseKey", "Esc"), LOCTEXT("PauseHelp", "暂停或返回"));
 			Body->AddSlot().AutoHeight().Padding(0,7,0,14)
-			[Text(LOCTEXT("Rule", "站台供两人落脚。离开站台，只能踩同伴的脚印。\n踩过的印会变成自己的颜色，留给同伴继续走。\nOUT 送印，IN 接印，WAIT 正在送达，1 只可借一次。"), 18, Muted)];
+			[
+				SNew(SBox).WidthOverride(760)
+				[
+					SNew(STextBlock).Font(Font(18,false)).ColorAndOpacity(Muted).AutoWrapText(true)
+					.Text(LOCTEXT("Rule",
+						"站台供两人落脚。离开站台后，只能踩同伴留下的脚印；空格、自己的脚印和已坍塌格都不能进入。\n"
+						"踩上同伴的印会把它改成自己的颜色，这正是把下一步留给同伴的方式。\n"
+						"OUT · 发件印板：角色踩上 OUT 时会读取来源脚印的当前颜色，并把它寄给对应连线末端的 IN。\n"
+						"IN · 收件印板：保留寄出瞬间的颜色，角色必须走到 IN 上才能借用；空 IN 不能进入。\n"
+						"WAIT · 正在送达：目标被占用或送印尚未到期时，印板会闪烁等待。\n"
+						"1 · 一次性印板：离开后立即坍塌，不能再回来。"))
+				]
+			];
 			Action(LOCTEXT("Back", "返回"), &AGridManager::TogglePause, true);
 			break;
 		case EGridScreen::Paused:
@@ -289,6 +336,14 @@ namespace
 				Text(FText::Format(LOCTEXT("ClearDetails", "{0}   /   共 {1} 步"),
 					Manager.GetLevelTitle(), FText::AsNumber(Manager.GetMoveCount())), 18, Muted)
 			];
+			if (Manager.HasCurrentLevelEcho())
+			{
+				Body->AddSlot().AutoHeight().Padding(0,0,0,17)
+				[
+					Text(FText::Format(LOCTEXT("EchoFound", "回响已留下 · {0}"),
+						Manager.GetLevelEchoName(Manager.GetLevelNumber() - 1)), 17, Orange)
+				];
+			}
 			if (Manager.IsFinalLevel())
 			{
 				Action(LOCTEXT("ViewEnding", "查看结局"), &AGridManager::Advance, true);
@@ -303,7 +358,9 @@ namespace
 		default:
 			break;
 		}
-		return Card(SNew(SBox).MinDesiredWidth(421)[Body], Panel, FMargin(30,26));
+		return Card(SNew(SBox).MinDesiredWidth(
+			Manager.GetScreen() == EGridScreen::MechanicIntro ? 800.f : 421.f)[Body],
+			Panel, FMargin(30,26));
 	}
 }
 

@@ -240,6 +240,23 @@ void AGridTile::UpdateBridgeStatus(const TArray<FString>& Labels, const TArray<b
 	}
 }
 
+void AGridTile::SetEchoAvailable(bool bAvailable, UMaterialInterface* Material)
+{
+	bEchoAvailable = bAvailable;
+	if (bAvailable && !EchoMarker)
+	{
+		const FLinearColor EchoGold(.95f,.80f,.42f);
+		EchoHalo = GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cylinder,
+			FVector(0,0,48), FVector(.17f,.17f,.012f), EchoGold, 1.4f);
+		EchoMarker = GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
+			FVector(0,0,61), FVector(.095f,.095f,.095f), EchoGold, 3.2f, FRotator(0,45,45));
+	}
+	if (EchoHalo) { EchoHalo->SetVisibility(bAvailable); }
+	if (EchoMarker) { EchoMarker->SetVisibility(bAvailable); }
+	EchoTime = 0.f;
+	if (bAvailable) { SetActorTickEnabled(true); }
+}
+
 void AGridTile::MakeFootprints(UMaterialInterface* Material)
 {
 	using namespace GridVisuals;
@@ -433,7 +450,18 @@ void AGridTile::Tick(float DeltaSeconds)
 		const bool bFlash = FMath::Fmod(GetWorld()->GetTimeSeconds(), .65f) < .36f;
 		GridVisuals::Paint(Countdown[0], bFlash ? FLinearColor(1.f,.64f,.28f) : DarkSeam, bFlash ? 1.7f : .1f);
 	}
-	SetActorTickEnabled(DeckDuration > 0.f || bLastStep || TileData.bPrintPending || (Ripple && Ripple->IsVisible()));
+	if (bEchoAvailable && EchoMarker && EchoHalo)
+	{
+		EchoTime += DeltaSeconds;
+		const float Bob = FMath::Sin(EchoTime * 3.6f) * 4.f;
+		EchoMarker->SetRelativeLocation(FVector(0,0,61.f + Bob));
+		EchoMarker->SetRelativeRotation(FRotator(0,EchoTime * 72.f,45.f));
+		const float Pulse = .65f + .35f * (0.5f + 0.5f * FMath::Sin(EchoTime * 5.f));
+		GridVisuals::Paint(EchoMarker, FLinearColor(.95f,.80f,.42f), 2.f + Pulse * 2.f);
+		GridVisuals::Paint(EchoHalo, FLinearColor(.95f,.80f,.42f), .7f + Pulse);
+	}
+	SetActorTickEnabled(DeckDuration > 0.f || bLastStep || TileData.bPrintPending ||
+		(Ripple && Ripple->IsVisible()) || bEchoAvailable);
 }
 
 AGridPuzzleCharacter::AGridPuzzleCharacter()
@@ -478,6 +506,17 @@ void AGridPuzzleCharacter::Setup(EPlayerRole NewRole, FIntPoint Start, UMaterial
 	Shape(*this, Figure, Material, EGridShape::Cube, FVector(-12,-7,34),
 		FVector(.26f,.072f,.032f), ScarfColor * Ink, .57f, FRotator(14,17,-8));
 	Figure->SetRelativeRotation(FRotator(0,155,0));
+
+	// A floating beacon above the head cannot be confused with a footprint on the board.
+	ControlHalo = Shape(*this, RootComponent, Material, EGridShape::Cylinder, FVector(0,0,91),
+		FVector(.21f,.21f,.012f), Ink, 2.2f);
+	ControlPointer = Shape(*this, RootComponent, Material, EGridShape::Cone, FVector(0,0,98),
+		FVector(.08f,.08f,.16f), Ink, 3.1f, FRotator(180,0,0));
+	ControlDiamond = Shape(*this, RootComponent, Material, EGridShape::Cube, FVector(0,0,111),
+		FVector(.095f,.095f,.095f), Cream, 3.2f, FRotator(0,45,45));
+	ControlHalo->SetVisibility(false);
+	ControlPointer->SetVisibility(false);
+	ControlDiamond->SetVisibility(false);
 }
 
 void AGridPuzzleCharacter::MoveTo(FIntPoint Destination, FVector WorldDestination, float MoveDuration, bool bCurve)
@@ -506,7 +545,14 @@ void AGridPuzzleCharacter::RejectMove(FVector WorldDirection)
 
 void AGridPuzzleCharacter::SetControlState(bool bControlled, bool bFinished)
 {
-	Selection->SetVisibility(bControlled && !bFinished);
+	bIsControlled = bControlled && !bFinished;
+	bIsFinished = bFinished;
+	Selection->SetVisibility(bIsControlled);
+	ControlHalo->SetVisibility(bIsControlled);
+	ControlPointer->SetVisibility(bIsControlled);
+	ControlDiamond->SetVisibility(bIsControlled);
+	BeaconTime = 0.f;
+	SetActorTickEnabled(bIsControlled || Duration > 0.f);
 	GridVisuals::Paint(Shadow, bFinished ? GridVisuals::RoleColor(TravelerRole) * .5f : DarkSeam, bFinished ? 1.f : .25f);
 	OnControlChanged(bControlled, bFinished);
 }
@@ -514,15 +560,32 @@ void AGridPuzzleCharacter::SetControlState(bool bControlled, bool bFinished)
 void AGridPuzzleCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	Elapsed += DeltaSeconds;
-	const float Alpha = FMath::Min(1.f, Elapsed / Duration);
-	const float Hop = FMath::Sin(PI * Alpha);
-	SetActorLocation(FMath::Lerp(From, To, FMath::SmoothStep(0.f,1.f,Alpha)) + (Nudge + CurveOffset) * Hop);
-	Figure->SetRelativeLocation(FVector(0,0,Nudge.IsZero() ? 9.f * Hop : 0.f));
-	if (Alpha >= 1.f)
+	if (Duration > 0.f)
 	{
-		SetActorLocation(To);
-		Figure->SetRelativeLocation(FVector::ZeroVector);
-		SetActorTickEnabled(false);
+		Elapsed += DeltaSeconds;
+		const float Alpha = FMath::Min(1.f, Elapsed / Duration);
+		const float Hop = FMath::Sin(PI * Alpha);
+		SetActorLocation(FMath::Lerp(From, To, FMath::SmoothStep(0.f,1.f,Alpha)) + (Nudge + CurveOffset) * Hop);
+		Figure->SetRelativeLocation(FVector(0,0,Nudge.IsZero() ? 9.f * Hop : 0.f));
+		if (Alpha >= 1.f)
+		{
+			SetActorLocation(To);
+			Figure->SetRelativeLocation(FVector::ZeroVector);
+			Duration = 0.f;
+		}
 	}
+
+	if (bIsControlled)
+	{
+		BeaconTime += DeltaSeconds;
+		const float Bob = FMath::Sin(BeaconTime * 4.2f) * 3.2f;
+		ControlDiamond->SetRelativeLocation(FVector(0,0,111.f + Bob));
+		ControlDiamond->SetRelativeRotation(FRotator(0, BeaconTime * 95.f, 45.f));
+		ControlPointer->SetRelativeLocation(FVector(0,0,98.f + Bob * .45f));
+		const float Pulse = .70f + .30f * (0.5f + 0.5f * FMath::Sin(BeaconTime * 5.4f));
+		GridVisuals::Paint(ControlDiamond, GridVisuals::RoleColor(TravelerRole), 2.2f + Pulse * 1.8f);
+		GridVisuals::Paint(ControlPointer, GridVisuals::RoleColor(TravelerRole), 1.8f + Pulse * 1.4f);
+	}
+
+	SetActorTickEnabled(bIsControlled || Duration > 0.f);
 }
