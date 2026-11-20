@@ -152,10 +152,11 @@ namespace
 				LOCTEXT("LockedChallenges", "挑战 · 完成主线后解锁"), 18, Orange)];
 			Body->AddSlot().AutoHeight()[Challenges];
 		}
-		TSharedRef<SHorizontalBox> Prototypes = SNew(SHorizontalBox);
+		TSharedRef<SUniformGridPanel> Prototypes = SNew(SUniformGridPanel).SlotPadding(FMargin(0,0,8,8));
 		for (int32 Index = Manager.GetCampaignLevelCount(); Index < Manager.GetLevelCount(); ++Index)
 		{
-			Prototypes->AddSlot().AutoWidth().Padding(0,0,8,0)[MakeLevelButton(Index)];
+			const int32 Slot = Index - Manager.GetCampaignLevelCount();
+			Prototypes->AddSlot(Slot % 4, Slot / 4)[MakeLevelButton(Index)];
 		}
 		Body->AddSlot().AutoHeight().Padding(0,18,0,8)[Text(LOCTEXT("Prototypes", "玩法试玩"), 18, Blue)];
 		Body->AddSlot().AutoHeight()[Prototypes];
@@ -208,7 +209,11 @@ namespace
 			[
 				Card(SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight()[Text(Chapter, 14, Blue, true)]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[Text(Manager.GetLevelTitle(), 30)],
+					+ SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[Text(Manager.GetLevelTitle(), 28)]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)
+					[Text(FText::Format(LOCTEXT("SectionProgress", "区域 {0}/{1} · {2}"),
+						FText::AsNumber(Manager.GetSectionNumber()), FText::AsNumber(Manager.GetSectionCount()),
+						Manager.GetSectionTitle()), 16, Muted)],
 					Panel, FMargin(16,8))
 			]
 			+ SHorizontalBox::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top)
@@ -350,7 +355,7 @@ namespace
 				Body->AddSlot().AutoHeight().Padding(0,0,0,17)
 				[
 					Text(FText::Format(LOCTEXT("EchoFound", "回响已留下 · {0}"),
-						Manager.GetLevelEchoName(Manager.GetLevelNumber() - 1)), 17, Orange)
+						Manager.GetLevelEchoName(Manager.GetSourceLevelIndex())), 17, Orange)
 				];
 			}
 			if (Manager.IsFinalLevel())

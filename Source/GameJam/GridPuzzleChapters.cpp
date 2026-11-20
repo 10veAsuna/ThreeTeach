@@ -1,4 +1,5 @@
 #include "GridPuzzleGame.h"
+#include "Misc/PackageName.h"
 
 #define LOCTEXT_NAMESPACE "GridPuzzleChaptersV4"
 
@@ -17,6 +18,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 		Level->FragileLifetime = Lifetime;
 		Level->bChallenge = bChallenge;
 		Level->bRequireBorrowedPrints = true;
+		Level->LegacyChapterIndex = Result.Num();
 		Result.Add(Level);
 		return Level;
 	};
@@ -295,6 +297,20 @@ TArray<UGridLevelDataAsset*> AGridManager::CreatePrototypeLevels()
 		LOCTEXT("SwapPrototypeHint", "让两人分别站上相邻的 SWAP 印板。按 E 预览，再按 E 同时迈步。"),
 		EGridPrototype::SwapPlaces, {TEXT("bAouBa")});
 	Exchange->SwapTiles = {{2, 0}, {3, 0}};
+	Result.Append(CreateFusionLevels());
+	// 导入过的实验资源优先于代码默认值，方便在编辑器调整独立小关。
+	for (int32 Index = 3; Index < Result.Num(); ++Index)
+	{
+		const FString Name = FString::Printf(TEXT("DA_V6_Experiment%02d"), Index - 2);
+		const FString Package = TEXT("/Game/OneStep/Levels/V6/Experiments/") + Name;
+		if (FPackageName::DoesPackageExist(Package))
+		{
+			if (UGridLevelDataAsset* Asset = LoadObject<UGridLevelDataAsset>(nullptr, *(Package + TEXT(".") + Name)))
+			{
+				Result[Index] = Asset;
+			}
+		}
+	}
 	return Result;
 }
 

@@ -47,6 +47,13 @@ struct FTileData
 	UPROPERTY(BlueprintReadOnly) bool bFreshPrint = false;
 	// 转桥在两个朝向各保留一组网格槽位，当前朝向之外的槽位视为虚空。
 	UPROPERTY(BlueprintReadOnly) bool bFoldedAway = false;
+	// 融合玩法使用地形叠加，落脚仍通过同一套脚印判定。
+	UPROPERTY(BlueprintReadOnly) bool bIce = false;
+	UPROPERTY(BlueprintReadOnly) bool bCrate = false;
+	UPROPERTY(BlueprintReadOnly) bool bRhythm = false;
+	UPROPERTY(BlueprintReadOnly) bool bRhythmOpen = true;
+	UPROPERTY(BlueprintReadOnly) bool bPatrol = false;
+	UPROPERTY(BlueprintReadOnly) bool bPatrolNext = false;
 
 	// 只有这些地块承载可被角色改写的脚印，起点、终点等地块另行处理。
 	bool HasFootprints() const
@@ -138,6 +145,7 @@ public:
 	// 严格模式下，承载脚印的地块必须已有同伴印记才能进入，空印格也会阻挡。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Level") bool bRequireBorrowedPrints = false;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Level") bool bChallenge = false;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Chapter") int32 LegacyChapterIndex = INDEX_NONE;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Prototype") EGridPrototype Prototype = EGridPrototype::None;
 	// Turning bridge: controls, then one array per orientation with corresponding stones.
@@ -152,12 +160,23 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Prototype") TArray<FIntPoint> ReplayTiles;
 	// 换位要求两个相邻印板各站一人，并且两人都已在自己的脚下写出新印。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Prototype") TArray<FIntPoint> SwapTiles;
+
+	// 可组合的玩法配置，数组中的格子仍需在 Rows 中声明。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion") TArray<FIntPoint> IceTiles;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion") TArray<FIntPoint> Crates;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion") TArray<FIntPoint> RhythmTiles;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion", meta=(ClampMin="2")) int32 RhythmPeriod = 3;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion", meta=(ClampMin="0")) int32 RhythmClosedPhase = 2;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion") TArray<FIntPoint> PatrolRoute;
+	// 章节按区域连续推进，子关卡资源保留各自机关和布局。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Chapter") TArray<TObjectPtr<UGridLevelDataAsset>> Sections;
 };
 
 // 判定结果交给管理器转换成玩家提示与反馈动画。
 enum class EGridMoveResult : uint8
 {
-	Moved, InvalidDirection, Finished, Void, Blocked, Occupied, OwnFootprint, Collapsed, OtherGoal, LockedGoal, ClosedBridge, EmptyPrint, ReplayOnly
+	Moved, InvalidDirection, Finished, Void, Blocked, Occupied, OwnFootprint, Collapsed, OtherGoal, LockedGoal, ClosedBridge, EmptyPrint, ReplayOnly,
+	CrateBlocked, RhythmClosed, PatrolBlocked
 };
 
 // 单次行动的结果。ChangedTiles 包括落脚之外受倒计时、寄印、开关影响的所有格子。
@@ -171,6 +190,8 @@ struct FGridMove
 	bool bSwitchActivated = false;
 	bool bReachedGoal = false;
 	bool bSentPrint = false;
+	TArray<FIntPoint> Path;
+	int32 BorrowedPrintCount = 0;
 };
 
 // 可按值复制的规则状态，供正常移动、机关预览、撤销和自动化测试共用。
@@ -201,6 +222,7 @@ public:
 	bool IsFinished(EPlayerRole Role) const { return Finished[RoleIndex(Role)]; }
 	bool IsComplete() const { return Finished[0] && Finished[1]; }
 	int32 GetMoveCount() const { return MoveCount; }
+	int32 GetRhythmPeriod() const { return RhythmPeriod; }
 	const TArray<FGridPrintEffect>& GetPrintEffects() const { return PrintEffects; }
 
 	static int32 RoleIndex(EPlayerRole Role) { return Role == EPlayerRole::PlayerA ? 0 : 1; }
@@ -224,6 +246,9 @@ private:
 
 	void UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner);
 	bool InitializePrototype(const UGridLevelDataAsset& Level);
+	bool InitializeFusion(const UGridLevelDataAsset& Level);
+	void UpdateFusionTiles(TArray<FIntPoint>& Changed);
+	FGridMove MoveWithTerrain(EPlayerRole Role, FIntPoint Direction, bool bReplaying);
 	FGridMove MoveCharacter(EPlayerRole Role, FIntPoint Direction, bool bReplaying);
 	void ResolveStep(FGridMove& Move, EFootprintOwner Owner);
 	bool ArePrintTargetsFree(const TArray<FPrintWrite>& Writes) const;
@@ -255,4 +280,7 @@ private:
 	FIntPoint ReplayStart = FIntPoint::ZeroValue;
 	bool bRecording = false;
 	bool bAlternateDeck = false;
+	int32 RhythmPeriod = 3;
+	int32 RhythmClosedPhase = 2;
+	TArray<FIntPoint> PatrolRoute;
 };

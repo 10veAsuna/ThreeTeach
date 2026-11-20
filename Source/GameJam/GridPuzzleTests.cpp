@@ -7,6 +7,9 @@
 #include "Containers/Queue.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -36,6 +39,15 @@ struct FGridTestSearch
 			Key.AppendChar(TEXT('0') + static_cast<int32>(Tile.FootprintOwner));
 			if (Tile.HasFootprints()) { Key += FString::Printf(TEXT("%d;"), Tile.RemainingMoves); }
 		}
+		// 新机关的时钟相位与箱位参与去重，避免把不同后继的局面误判成同一状态。
+		int32 RhythmPhase = 0;
+		for (const auto& Pair : Rules.Tiles)
+		{
+			if (Pair.Value.bRhythm) { RhythmPhase = Rules.MoveCount % Rules.RhythmPeriod; break; }
+		}
+		Key += FString::Printf(TEXT("|%d,%d|"), RhythmPhase,
+			Rules.PatrolRoute.IsEmpty() ? 0 : Rules.MoveCount % Rules.PatrolRoute.Num());
+		for (const auto& Pair : Rules.Tiles) { Key.AppendChar(Pair.Value.bCrate ? TEXT('C') : TEXT('.')); }
 		for (int32 Index = 0; Index < Rules.PrintEffects.Num(); ++Index)
 		{
 			Key.AppendChar(Rules.UsedPrintEffects.Contains(Index) ? TEXT('1') : TEXT('0'));
@@ -84,7 +96,13 @@ struct FGridTestSearch
 					const FTileData* Target = Current.GetTiles().Find(Current.GetPosition(Role) + Direction);
 					if (!Target || (!bAllowFreshPrints && Target->bFreshPrint)) { continue; }
 					FGridPuzzleRules Next = Current;
-					if (Next.TryMove(Role, Direction).Result == EGridMoveResult::Moved) { Enqueue(MoveTemp(Next)); }
+					const FGridMove Move = Next.TryMove(Role, Direction);
+					bool bAllowed = true;
+					for (FIntPoint Position : Move.Path)
+					{
+						bAllowed &= bAllowFreshPrints || !Current.GetTiles().FindChecked(Position).bFreshPrint;
+					}
+					if (Move.Result == EGridMoveResult::Moved && bAllowed) { Enqueue(MoveTemp(Next)); }
 				}
 				FGridPuzzleRules Next = Current;
 				TArray<FIntPoint> Changed;
@@ -154,6 +172,39 @@ struct FGridTestSearch
 		}
 		return false;
 	}
+
+	// 为融合小关生成一条可复现路线，测试日志会记录该路线供手动试玩对照。
+	static TArray<FString> SolveFusion(const UGridLevelDataAsset& Level)
+	{
+		struct FNode { FGridPuzzleRules Rules; TArray<FString> Path; };
+		FNode Start;
+		if (!Start.Rules.Initialize(Level)) { return {}; }
+		TArray<FNode> Queue;
+		TSet<FString> Seen;
+		Seen.Add(StateKey(Start.Rules));
+		Queue.Add(MoveTemp(Start));
+		const FIntPoint Directions[] = {Right, Up, Left, Down};
+		const TCHAR* Letters[] = {TEXT("R"), TEXT("U"), TEXT("L"), TEXT("D")};
+		for (int32 Index = 0; Index < Queue.Num() && Queue.Num() < 100000; ++Index)
+		{
+			const FNode Current = MoveTemp(Queue[Index]);
+			if (Current.Rules.IsComplete()) { return Current.Path; }
+			for (EPlayerRole Role : {Blue, Orange})
+			{
+				for (int32 Direction = 0; Direction < 4; ++Direction)
+				{
+					FNode Next = Current;
+					if (Next.Rules.TryMove(Role, Directions[Direction]).Result != EGridMoveResult::Moved) { continue; }
+					const FString Key = StateKey(Next.Rules);
+					if (Seen.Contains(Key)) { continue; }
+					Seen.Add(Key);
+					Next.Path.Add(FString(Role == Blue ? TEXT("A") : TEXT("B")) + Letters[Direction]);
+					Queue.Add(MoveTemp(Next));
+				}
+			}
+		}
+		return {};
+	}
 };
 
 // 宏把测试类注册为控制台可查找的名字，RunTest 是对应的执行函数。
@@ -163,7 +214,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridPrototypeTest, "OneStep.Rules.Prototypes",
 
 bool FGridPrototypeTest::RunTest(const FString& Parameters)
 {
-	const TArray<UGridLevelDataAsset*> Levels = AGridManager::CreatePrototypeLevels();
+	TArray<UGridLevelDataAsset*> Levels = AGridManager::CreatePrototypeLevels();
+	Levels.SetNum(3);
 	for (const UGridLevelDataAsset* Level : Levels)
 	{
 		const FString Name = Level->Title.ToString();
@@ -614,6 +666,169 @@ bool FGridEchoPickupTest::RunTest(const FString& Parameters)
 		AGridManager::LevelHasMechanicIntro(9));
 	TestTrue(TEXT("Chapter 3 introduces switches and locked goals"),
 		AGridManager::LevelHasMechanicIntro(2));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridFusionTest, "OneStep.Rules.Fusion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGridFusionTest::RunTest(const FString& Parameters)
+{
+	const TArray<UGridLevelDataAsset*> Levels = AGridManager::CreateFusionLevels();
+	if (!TestEqual(TEXT("Four fusion experiments"), Levels.Num(), 4)) { return false; }
+	for (int32 Index = 0; Index < Levels.Num(); ++Index)
+	{
+		const TArray<FString> Path = FGridTestSearch::SolveFusion(*Levels[Index]);
+		TestFalse(FString::Printf(TEXT("Fusion %d has a reference solution"), Index), Path.IsEmpty());
+		UE_LOG(LogTemp, Display, TEXT("FUSION_ROUTE %d %s"), Index, *FString::Join(Path, TEXT(" ")));
+		for (int32 RoleMask : {1, 2})
+		{
+			TestFalse(FString::Printf(TEXT("Fusion %d needs fresh prints for role %d"), Index, RoleMask),
+				FGridTestSearch::CanClear(*Levels[Index], EGridPrototype::None, RoleMask));
+		}
+		FGridPuzzleRules Rules;
+		TestTrue(TEXT("Fusion initializes"), Rules.Initialize(*Levels[Index]));
+		const FString Before = FGridTestSearch::StateKey(Rules);
+		TestTrue(TEXT("Invalid direction rejected"), Rules.TryMove(Blue, {1,1}).Result == EGridMoveResult::InvalidDirection);
+		TestEqual(TEXT("Rejected action is atomic"), FGridTestSearch::StateKey(Rules), Before);
+	}
+	FGridPuzzleRules Ice;
+	Ice.Initialize(*Levels[1]);
+	const FGridPuzzleRules BeforeIce = Ice;
+	const FGridMove Slide = Ice.TryMove(Blue, Right);
+	TestEqual(TEXT("Slide borrows both consecutive prints"), Slide.Path.Num(), 2);
+	TestEqual(TEXT("Slide stops before own print"), Ice.GetPosition(Blue), FIntPoint(3,1));
+	Ice = BeforeIce;
+	TestEqual(TEXT("Restoring snapshot restores every slid footprint"), Ice.GetMoveCount(), 0);
+	TestTrue(TEXT("Restored slide can be repeated"), Ice.TryMove(Blue, Right).Path.Num() == 2);
+
+	// 推箱也要先借到箱子脚下的印，不能靠推动箱子绕过自身脚印限制。
+	UGridLevelDataAsset* OwnCrate = AGridManager::CreateFusionLevels()[0];
+	OwnCrate->Rows[1][3] = TCHAR('u');
+	FGridPuzzleRules CrateRules;
+	TestTrue(TEXT("Own-print crate fixture initializes"), CrateRules.Initialize(*OwnCrate));
+	CrateRules.TryMove(Blue, Right);
+	const FString BeforeCrate = FGridTestSearch::StateKey(CrateRules);
+	TestTrue(TEXT("Crate cannot bypass own print"), CrateRules.TryMove(Blue, Right).Result == EGridMoveResult::OwnFootprint);
+	TestEqual(TEXT("Blocked push preserves crate and clock"), FGridTestSearch::StateKey(CrateRules), BeforeCrate);
+
+	TArray<UGridLevelDataAsset*> Prototypes = AGridManager::CreatePrototypeLevels();
+	UGridLevelDataAsset* Turning = Prototypes[0];
+	Turning->TurnControls.Add({2, 2});
+	Turning->Crates = {{3, 2}};
+	Turning->IceTiles = {{3, 2}};
+	Turning->RhythmTiles = {{3, 2}};
+	FGridPuzzleRules Deck;
+	TArray<FIntPoint> Changed;
+	TestTrue(TEXT("Loaded fusion bridge initializes"), Deck.Initialize(*Turning));
+	TestTrue(TEXT("Loaded bridge can turn"), Deck.TryTurnBridge(Blue, Changed));
+	const FTileData& MovedDeck = Deck.GetTiles().FindChecked({2, 3});
+	TestTrue(TEXT("Bridge carries crate and surface mechanics"), MovedDeck.bCrate && MovedDeck.bIce && MovedDeck.bRhythm);
+	TestFalse(TEXT("Old slot releases crate"), Deck.GetTiles().FindChecked({3, 2}).bCrate);
+	TestTrue(TEXT("Loaded bridge can turn back"), Deck.TryTurnBridge(Blue, Changed));
+	TestTrue(TEXT("Bridge returns its crate and ice"), Deck.GetTiles().FindChecked({3, 2}).bCrate && Deck.GetTiles().FindChecked({3, 2}).bIce);
+
+	UGridLevelDataAsset* Exchange = Prototypes[2];
+	Exchange->RhythmTiles = Exchange->SwapTiles;
+	Exchange->RhythmClosedPhase = 0;
+	FGridPuzzleRules GateSwap;
+	TestTrue(TEXT("Rhythmic swap initializes"), GateSwap.Initialize(*Exchange));
+	GateSwap.TryMove(Blue, Right);
+	GateSwap.TryMove(Orange, Left);
+	const FString BeforeSwap = FGridTestSearch::StateKey(GateSwap);
+	FGridMove SwapMove;
+	TestFalse(TEXT("Swap obeys closed beat"), GateSwap.TrySwap(Blue, SwapMove));
+	TestEqual(TEXT("Blocked swap is atomic"), FGridTestSearch::StateKey(GateSwap), BeforeSwap);
+
+	UGridLevelDataAsset* Recording = Prototypes[1];
+	Recording->IceTiles = {{2, 3}};
+	FGridPuzzleRules ReplayIce;
+	TestTrue(TEXT("Icy replay initializes"), ReplayIce.Initialize(*Recording));
+	ReplayIce.StartRecording(Blue);
+	ReplayIce.TryMove(Blue, Right);
+	ReplayIce.TryMove(Blue, Up);
+	ReplayIce.TryMove(Blue, Up);
+	ReplayIce.TryMove(Orange, Up);
+	TArray<FGridMove> Replay;
+	TArray<FGridPuzzleRules> States;
+	const FString BeforeReplay = FGridTestSearch::StateKey(ReplayIce);
+	TestFalse(TEXT("Occupied final replay landing rejects plan"), ReplayIce.PlanReplay(Orange, Replay, States));
+	if (TestEqual(TEXT("Icy replay evaluates all three commands"), Replay.Num(), 3))
+	{
+		TestEqual(TEXT("Replay borrows both icy cells"), Replay[0].Path.Num(), 2);
+	}
+	TestTrue(TEXT("Failed icy replay discards snapshots"), States.IsEmpty());
+	TestEqual(TEXT("Icy replay preview preserves live state"), FGridTestSearch::StateKey(ReplayIce), BeforeReplay);
+
+	const TArray<UGridLevelDataAsset*> Original = AGridManager::CreateDefaultLevels();
+	const TArray<UGridLevelDataAsset*> Chapters = AGridManager::CreateCampaignLevels(Original);
+	TestEqual(TEXT("Campaign has five long chapters"), Chapters.Num(), 5);
+	TSet<int32> Included;
+	int32 Sections = 0;
+	for (const UGridLevelDataAsset* Chapter : Chapters)
+	{
+		TestTrue(TEXT("Chapter contains multiple areas"), Chapter->Sections.Num() >= 3);
+		for (const UGridLevelDataAsset* Section : Chapter->Sections)
+		{
+			++Sections;
+			FGridPuzzleRules Rules;
+			TestTrue(TEXT("Every chapter area initializes"), Rules.Initialize(*Section));
+			if (Section->LegacyChapterIndex != INDEX_NONE) { Included.Add(Section->LegacyChapterIndex); }
+			else { TestFalse(TEXT("Combined area has a solution"), FGridTestSearch::SolveFusion(*Section).IsEmpty()); }
+		}
+	}
+	TestEqual(TEXT("All fourteen original mechanisms retained"), Included.Num(), 14);
+	TestEqual(TEXT("All four new experiments join the campaign"), Sections, 18);
+	return true;
+}
+
+// 使用真实管理器和运行时 Actor 检查跨区衔接，避免只测规则而遗漏场景与撤销历史。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridChapterRuntimeTest, "OneStep.Runtime.ChapterHandoff",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("Runtime test world"), World)) { return false; }
+	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	AGridPuzzlePlayerController* Controller = World->SpawnActor<AGridPuzzlePlayerController>();
+	AGridManager* Manager = World->SpawnActor<AGridManager>();
+	Manager->bPlaySound = false;
+	Manager->Levels.Append(AGridManager::CreateDefaultLevels());
+	Manager->Initialize(*Controller);
+	// 回响与引导预先标记已完成，测试过程只操作关内状态。
+	for (int32 Index = 0; Index < 14; ++Index)
+	{
+		Manager->EarnedEchoes.Add(Index);
+		Manager->SeenMechanicIntros.Add(Index);
+	}
+	Manager->LoadLevel(0);
+	Manager->SetScreen(EGridScreen::Playing);
+	World->GetTimerManager().Tick(0.f);
+	const TCHAR* Path[] = {TEXT("AR"),TEXT("AR"),TEXT("AU"),TEXT("AU"),TEXT("BL"),TEXT("BL"),TEXT("BD"),TEXT("BD")};
+	for (const TCHAR* Step : Path)
+	{
+		Manager->ActiveRole = Step[0] == 'A' ? Blue : Orange;
+		Manager->UnlockInputAt = 0.f;
+		const FIntPoint Direction = Step[1] == 'R' ? Right : Step[1] == 'L' ? Left : Step[1] == 'U' ? Up : Down;
+		Manager->Move(Direction);
+	}
+	TestTrue(TEXT("First area completes"), Manager->Rules.IsComplete());
+	// 定时器同一引擎帧只执行一次，推进帧号后检查真实的自动衔接回调。
+	++GFrameCounter;
+	World->GetTimerManager().Tick(1.f);
+	TestEqual(TEXT("Automatically enters second area"), Manager->GetSectionNumber(), 2);
+	TestEqual(TEXT("Chapter accumulates steps"), Manager->GetMoveCount(), 8);
+	TestTrue(TEXT("Earlier area undo history retained"), Manager->HasUndoMove());
+	Manager->UndoMove();
+	TestEqual(TEXT("Undo crosses back into first area"), Manager->GetSectionNumber(), 1);
+	TestEqual(TEXT("Undo restores chapter move total"), Manager->GetMoveCount(), 7);
+	TestFalse(TEXT("Undo restores unfinished board"), Manager->Rules.IsComplete());
+	Manager->ResetLevel();
+	TestEqual(TEXT("Reset restarts whole chapter"), Manager->GetMoveCount(), 0);
+	TestFalse(TEXT("Reset clears undo history"), Manager->HasUndoMove());
+	World->DestroyWorld(false);
+	GEngine->DestroyWorldContext(World);
 	return true;
 }
 

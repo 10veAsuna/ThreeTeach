@@ -58,6 +58,8 @@ public:
 	// 默认关卡定义在 GridPuzzleChapters.cpp 中，Python 可据此生成可编辑的 Data Asset。
 	UFUNCTION(BlueprintCallable, Category="Puzzle") static TArray<UGridLevelDataAsset*> CreateDefaultLevels();
 	static TArray<UGridLevelDataAsset*> CreatePrototypeLevels();
+	UFUNCTION(BlueprintCallable, Category="Puzzle") static TArray<UGridLevelDataAsset*> CreateFusionLevels();
+	UFUNCTION(BlueprintCallable, Category="Puzzle") static TArray<UGridLevelDataAsset*> CreateCampaignLevels(const TArray<UGridLevelDataAsset*>& SourceLevels);
 
 	UFUNCTION(BlueprintCallable, Category="Puzzle") void Move(FIntPoint Direction);
 	UFUNCTION(BlueprintCallable, Category="Puzzle") void SwitchCharacter();
@@ -89,9 +91,13 @@ public:
 	bool CanSelectLevel(int32 Index) const;
 	bool IsChallenge() const { return LevelIndex >= MainLevelCount && !IsPrototype(); }
 	bool IsPrototype() const { return LevelIndex >= CampaignLevelCount; }
-	bool HasLevelAction() const { return Levels.IsValidIndex(LevelIndex) && Levels[LevelIndex] && Levels[LevelIndex]->Prototype != EGridPrototype::None; }
+	bool HasLevelAction() const { return CurrentSection() && CurrentSection()->Prototype != EGridPrototype::None; }
 	bool AreChallengesUnlocked() const { return CompletedMainLevels >= MainLevelCount; }
-	int32 GetMoveCount() const { return Rules.GetMoveCount(); }
+	int32 GetMoveCount() const { return ChapterMoveCount + Rules.GetMoveCount(); }
+	int32 GetSectionNumber() const { return SectionIndex + 1; }
+	int32 GetSectionCount() const;
+	FText GetSectionTitle() const;
+	int32 GetSourceLevelIndex() const;
 	bool IsFinalLevel() const { return GetLevelNumber() == MainLevelCount; }
 	bool IsFinished(EPlayerRole Traveler) const { return Rules.IsFinished(Traveler); }
 	EPlayerRole GetActiveRole() const { return ActiveRole; }
@@ -102,7 +108,7 @@ public:
 	FText GetFeedback() const { return Feedback; }
 	FText GetRecordingStatus() const;
 	bool GetEndingReady() const { return bEndingReady; }
-	bool HasCurrentLevelEcho() const { return EarnedEchoes.Contains(LevelIndex); }
+	bool HasCurrentLevelEcho() const { return EarnedEchoes.Contains(GetSourceLevelIndex()); }
 	int32 GetEarnedEchoCount() const { return EarnedEchoes.Num(); }
 	int32 GetEchoTargetCount() const;
 	static bool GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosition);
@@ -113,17 +119,24 @@ public:
 	FText GetMechanicIntroExample() const;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FGridChapterRuntimeTest;
+#endif
 	// 保存行动前完整规则与受影响格子。回放三步只压入一个条目，撤销时整段恢复。
 	struct FUndoStep
 	{
 		FGridPuzzleRules PreviousRules;
 		EPlayerRole Mover;
 		TArray<FIntPoint> ChangedTiles;
+		int32 Section = 0;
+		int32 ChapterMoves = 0;
 	};
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	// 切关时重建地块和人物，编辑器静态地图只承担启动场景的作用。
-	bool LoadLevel(int32 Index);
+	bool LoadLevel(int32 Index, int32 Section = 0, bool bContinueChapter = false);
+	const UGridLevelDataAsset* CurrentSection() const;
+	void SaveUndo(FGridPuzzleRules Previous, EPlayerRole Mover, TArray<FIntPoint> Changed);
 	void SetScreen(EGridScreen NewScreen);
 	void UpdateControl();
 	void UpdateBridgeDisplays();
@@ -167,6 +180,8 @@ private:
 	EGridScreen Screen = EGridScreen::Menu;
 	EPlayerRole ActiveRole = EPlayerRole::PlayerA;
 	int32 LevelIndex = 0;
+	int32 SectionIndex = 0;
+	int32 ChapterMoveCount = 0;
 	int32 MainLevelCount = 0;
 	int32 CampaignLevelCount = 0;
 	int32 ReplayIndex = 0;

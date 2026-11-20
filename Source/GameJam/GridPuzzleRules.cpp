@@ -175,6 +175,7 @@ bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 	}
 	Initial.PrintEffects = Level.PrintEffects;
 	if (!Initial.InitializePrototype(Level)) { return false; }
+	if (!Initial.InitializeFusion(Level)) { return false; }
 	// 到这里整关配置已有效，可以一次性提交新局面。
 	*this = MoveTemp(Initial);
 	return true;
@@ -276,11 +277,37 @@ bool FGridPuzzleRules::IsBridgeConditionMet(const FGridBridgeCondition& Conditio
 // 普通移动入口，只有 A 的成功移动会追加到正在录制的三步方向中。
 FGridMove FGridPuzzleRules::TryMove(EPlayerRole Role, FIntPoint Direction)
 {
-	FGridMove Move = MoveCharacter(Role, Direction, false);
+	FGridMove Move = MoveWithTerrain(Role, Direction, false);
 	if (Move.Result == EGridMoveResult::Moved && bRecording && Role == EPlayerRole::PlayerA)
 	{
 		Recording.Add(Direction);
 		bRecording = Recording.Num() < RecordedLength;
+	}
+	return Move;
+}
+
+// 手动移动与回放共用滑行结算，每经过一格都重新检查脚印、箱子与时钟。
+FGridMove FGridPuzzleRules::MoveWithTerrain(EPlayerRole Role, FIntPoint Direction, bool bReplaying)
+{
+	FGridMove Move = MoveCharacter(Role, Direction, bReplaying);
+	if (Move.Result == EGridMoveResult::Moved)
+	{
+		Move.Path.Add(Move.To);
+		Move.BorrowedPrintCount = Move.bFootprintTransferred ? 1 : 0;
+		// 冰面逐格借印，下一格不合法时停在最后一个合法落点。
+		while (Tiles.FindChecked(GetPosition(Role)).bIce && !IsFinished(Role))
+		{
+			const FGridMove Step = MoveCharacter(Role, Direction, bReplaying);
+			if (Step.Result != EGridMoveResult::Moved) { break; }
+			Move.To = Step.To;
+			Move.Path.Add(Step.To);
+			Move.BorrowedPrintCount += Step.bFootprintTransferred ? 1 : 0;
+			Move.bFootprintTransferred |= Step.bFootprintTransferred;
+			for (FIntPoint Position : Step.ChangedTiles) { Move.ChangedTiles.AddUnique(Position); }
+			Move.bSwitchActivated |= Step.bSwitchActivated;
+			Move.bReachedGoal |= Step.bReachedGoal;
+			Move.bSentPrint |= Step.bSentPrint;
+		}
 	}
 	return Move;
 }
@@ -312,7 +339,7 @@ bool FGridPuzzleRules::PlanReplay(EPlayerRole Role, TArray<FGridMove>& Steps, TA
 	FGridPuzzleRules Trial = *this;
 	for (const FIntPoint Direction : Recording)
 	{
-		FGridMove& Step = Steps.Add_GetRef(Trial.MoveCharacter(Role, Direction, true));
+		FGridMove& Step = Steps.Add_GetRef(Trial.MoveWithTerrain(Role, Direction, true));
 		if (Step.Result != EGridMoveResult::Moved)
 		{
 			States.Reset();
@@ -349,14 +376,22 @@ bool FGridPuzzleRules::TryTurnBridge(EPlayerRole Role, TArray<FIntPoint>& Change
 		FTileData& Next = Tiles.FindChecked(To[Index]);
 		Next.FootprintOwner = Previous.FootprintOwner;
 		Next.bFreshPrint = Previous.bFreshPrint;
+		// 桥上的箱子和表面机关随实体石板搬运，另一朝向只是该石板的备用槽位。
+		Next.bCrate = Previous.bCrate;
+		Next.bIce = Previous.bIce;
+		Next.bRhythm = Previous.bRhythm;
 		Next.bFoldedAway = false;
 		Previous.FootprintOwner = EFootprintOwner::None;
 		Previous.bFreshPrint = false;
+		Previous.bCrate = false;
+		Previous.bIce = false;
+		Previous.bRhythm = false;
 		Previous.bFoldedAway = true;
 		Changed.Add(From[Index]);
 		Changed.Add(To[Index]);
 	}
 	bAlternateDeck = !bAlternateDeck;
+	UpdateFusionTiles(Changed);
 	return true;
 }
 
@@ -369,6 +404,12 @@ bool FGridPuzzleRules::CanSwap() const
 	}
 	const FTileData& Blue = Tiles.FindChecked(Positions[0]);
 	const FTileData& Orange = Tiles.FindChecked(Positions[1]);
+	const bool bClosedRhythm = (MoveCount + 1) % RhythmPeriod == RhythmClosedPhase &&
+		(Blue.bRhythm || Orange.bRhythm);
+	const bool bPatrolCrossing = !PatrolRoute.IsEmpty() &&
+		(PatrolRoute[(MoveCount + 1) % PatrolRoute.Num()] == Positions[0] ||
+		 PatrolRoute[(MoveCount + 1) % PatrolRoute.Num()] == Positions[1]);
+	if (Blue.bCrate || Orange.bCrate || bClosedRhythm || bPatrolCrossing) { return false; }
 	return Blue.bFreshPrint && Blue.FootprintOwner == EFootprintOwner::PlayerA &&
 		Orange.bFreshPrint && Orange.FootprintOwner == EFootprintOwner::PlayerB;
 }
@@ -441,6 +482,33 @@ FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction,
 		if (Destination->GoalOwner != Role) { Move.Result = EGridMoveResult::OtherGoal; return Move; }
 		if (Destination->bIsLocked) { Move.Result = EGridMoveResult::LockedGoal; return Move; }
 	}
+	// 节拍随成功落脚推进，切换角色和非法输入不会推动时钟。
+	if (Destination->bRhythm && (MoveCount + 1) % RhythmPeriod == RhythmClosedPhase)
+	{
+		Move.Result = EGridMoveResult::RhythmClosed;
+		return Move;
+	}
+	if (!PatrolRoute.IsEmpty())
+	{
+		const FIntPoint Next = PatrolRoute[(MoveCount + 1) % PatrolRoute.Num()];
+		const int32 Other = 1 - Index;
+		if (Next == Move.To || (!Finished[Other] && Next == Positions[Other]))
+		{
+			Move.Result = EGridMoveResult::PatrolBlocked;
+			return Move;
+		}
+	}
+	FTileData* CrateTarget = nullptr;
+	if (Destination->bCrate)
+	{
+		CrateTarget = Tiles.Find(Move.To + Direction);
+		if (!CrateTarget || !CrateTarget->HasFootprints() || CrateTarget->bCrate ||
+			CrateTarget->bIsOccupied || CrateTarget->bIsCollapsed || CrateTarget->bFoldedAway)
+		{
+			Move.Result = EGridMoveResult::CrateBlocked;
+			return Move;
+		}
+	}
 
 	// 所有检查通过，从这里开始提交成功行动，拒绝的输入不会消耗步数。
 	Move.Result = EGridMoveResult::Moved;
@@ -450,6 +518,13 @@ FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction,
 	Destination->bIsOccupied = true;
 	Positions[Index] = Move.To;
 	Move.ChangedTiles = { Move.From, Move.To };
+	if (CrateTarget)
+	{
+		// 推箱者已经通过目标格脚印检查，再移箱并踏入箱子腾出的那格。
+		Destination->bCrate = false;
+		CrateTarget->bCrate = true;
+		Move.ChangedTiles.AddUnique(CrateTarget->GridPosition);
+	}
 
 	if (Source.TileType == ETileType::Plate)
 	{
@@ -513,6 +588,7 @@ void FGridPuzzleRules::ResolveStep(FGridMove& Move, EFootprintOwner Owner)
 	}
 
 	UpdatePrintEffects(Move, Owner);
+	UpdateFusionTiles(Move.ChangedTiles);
 
 	// Entry used the previous bridge state. Recompute after the whole step so a
 	// traveler can leave a bridge that closed beneath them during that step.

@@ -32,6 +32,28 @@ def save(obj):
     if not ASSETS.save_loaded_asset(obj, False):
         raise RuntimeError(f'Could not save {obj.get_path_name()}')
 
+
+# V6 资源保留原关卡内容，并把关卡组装为带子区域的五个章节。
+LEVEL_FIELDS = (
+    'title', 'hint', 'rows', 'fragile_lifetime', 'bridges', 'print_effects',
+    'require_borrowed_prints', 'challenge', 'prototype', 'turn_controls', 'turn_pivot',
+    'initial_deck', 'alternate_deck', 'record_start', 'replay_start', 'replay_tiles',
+    'swap_tiles', 'ice_tiles', 'crates', 'rhythm_tiles', 'rhythm_period',
+    'rhythm_closed_phase', 'patrol_route', 'legacy_chapter_index',
+)
+
+
+def persist_level(default, name, folder):
+    existed = ASSETS.does_asset_exist(path(name, folder))
+    factory = ue.DataAssetFactory()
+    factory.set_editor_property('data_asset_class', ue.GridLevelDataAsset)
+    level = asset(name, folder, ue.GridLevelDataAsset, factory)
+    if not existed:
+        for field in LEVEL_FIELDS:
+            level.set_editor_property(field, default.get_editor_property(field))
+        save(level)
+    return level
+
 def material():
     # Tint 控制基础色，Glow 控制自发光，C++ 为各组件生成独立动态材质实例。
     mat = asset('M_Stone', 'Art', ue.Material, ue.MaterialFactoryNew())
@@ -77,6 +99,21 @@ def main():
             save(level)
         levels.append(level)
 
+    # 独立实验使用单独资源，之后组合到长章时仍可单独试玩。
+    for i, default in enumerate(ue.GridManager.create_fusion_levels(), 1):
+        persist_level(default, f'DA_V6_Experiment{i:02}', 'Levels/V6/Experiments')
+    chapters = []
+    for i, default in enumerate(ue.GridManager.create_campaign_levels(levels), 1):
+        rooms = []
+        for j, section in enumerate(default.get_editor_property('sections'), 1):
+            rooms.append(persist_level(section, f'DA_V6_Room{i:02}_{j:02}', 'Levels/V6/Rooms'))
+        chapter = persist_level(default, f'DA_V6_Chapter{i:02}', 'Levels/V6')
+        chapter.set_editor_property('sections', rooms)
+        save(chapter)
+        chapters.append(chapter)
+    if len(chapters) != 5:
+        raise RuntimeError('Expected five chapters before updating BP_Board')
+
     tile, tile_defaults = blueprint('BP_StoneTile', ue.GridTile)
     tile_defaults.set_editor_property('memory_stone', ue.LinearColor(0.24, 0.36, 0.40))
     tile_defaults.set_editor_property('normal_stone', ue.LinearColor(0.13, 0.22, 0.29))
@@ -88,7 +125,7 @@ def main():
 
     # 管理器蓝图把关卡数组、地块类、人物类与调色材质连接起来。
     manager, manager_defaults = blueprint('BP_Board', ue.GridManager)
-    manager_defaults.set_editor_property('levels', levels)
+    manager_defaults.set_editor_property('levels', chapters)
     manager_defaults.set_editor_property('tile_class', tile.generated_class())
     manager_defaults.set_editor_property('character_class', character.generated_class())
     manager_defaults.set_editor_property('palette_material', palette)

@@ -84,6 +84,7 @@ AGridTile::AGridTile()
 void AGridTile::Setup(const FTileData& Data, UMaterialInterface* Material)
 {
 	using namespace GridVisuals;
+	VisualMaterial = Material;
 	const bool bObstacle = Data.TileType == ETileType::Obstacle;
 	const bool bFragile = Data.TileType == ETileType::Fragile;
 	const bool bSingleUse = Data.TileType == ETileType::SingleUse;
@@ -192,6 +193,7 @@ void AGridTile::FaceMarker(const FRotator& Rotation)
 	if (MarkerText) { MarkerText->SetWorldRotation(Rotation); }
 	if (BridgeReadout) { BridgeReadout->SetWorldRotation(Rotation); }
 	if (ActionMarker) { ActionMarker->SetWorldRotation(Rotation); }
+	if (FusionLabel) { FusionLabel->SetWorldRotation(Rotation); }
 }
 
 // 机关预览的落点标记独立于实际脚印，取消预览时可以单独隐藏。
@@ -297,6 +299,39 @@ void AGridTile::MakeFootprints(UMaterialInterface* Material)
 void AGridTile::Update(const FTileData& Data, bool bPulse)
 {
 	using namespace GridVisuals;
+	if (Data.bCrate && !CrateMesh)
+	{
+		CrateMesh = Shape(*this, Pieces, VisualMaterial, EGridShape::Cube, FVector(0,0,27),
+			FVector(.52f,.52f,.50f), FLinearColor(.43f,.25f,.10f), .12f);
+	}
+	if (CrateMesh) { CrateMesh->SetVisibility(Data.bCrate); }
+	const float PatrolHeight = Data.TileType == ETileType::Obstacle ? 132.f : 82.f;
+	if (Data.bPatrol && !PatrolMesh)
+	{
+		PatrolMesh = Shape(*this, Pieces, VisualMaterial, EGridShape::Sphere, FVector(0,0,PatrolHeight),
+			FVector(.23f), FLinearColor(1.f,.08f,.07f), 3.f);
+	}
+	if (PatrolMesh) { PatrolMesh->SetVisibility(Data.bPatrol); }
+	if (Data.bPatrolNext && !PatrolWarning)
+	{
+		PatrolWarning = Shape(*this, Pieces, VisualMaterial, EGridShape::Cylinder, FVector(0,0,PatrolHeight - 20.f),
+			FVector(.48f,.48f,.018f), FLinearColor(1.f,.38f,.12f), 1.4f);
+	}
+	if (PatrolWarning) { PatrolWarning->SetVisibility(Data.bPatrolNext); }
+	if ((Data.bIce || Data.bCrate || Data.bRhythm || Data.bPatrolNext) && !FusionLabel)
+	{
+		FusionLabel = GridLabel(*this, RootComponent, FString(), FVector(-27,0,
+			Data.TileType == ETileType::Obstacle ? 150.f : 24.f), 16.f);
+		FusionLabel->SetWorldRotation(MarkerRotation);
+	}
+	if (FusionLabel)
+	{
+		const FString Label = Data.bPatrolNext ? TEXT("NEXT") : Data.bCrate ?
+			(Data.FootprintOwner == EFootprintOwner::PlayerA ? TEXT("BOX / A") : TEXT("BOX / B")) : Data.bRhythm ?
+			(Data.bRhythmOpen ? TEXT("BEAT OPEN") : TEXT("BEAT WAIT")) : Data.bIce ? TEXT("ICE") : TEXT("");
+		FusionLabel->SetText(FText::FromString(Label));
+		FusionLabel->SetTextRenderColor(Data.bRhythm && !Data.bRhythmOpen ? FColor(255,100,90) : FColor(130,235,255));
+	}
 	const bool bFirstCollapse = Data.bIsCollapsed && !TileData.bIsCollapsed;
 	const bool bRestored = !Data.bIsCollapsed && TileData.bIsCollapsed;
 	const bool bNewBridge = Data.TileType == ETileType::Bridge && TileData.TileType != ETileType::Bridge;

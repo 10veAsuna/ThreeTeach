@@ -33,7 +33,7 @@ namespace
 	constexpr float RejectTime = .14f;
 	constexpr float DeckTime = .46f;
 	constexpr float SwapTime = .35f;
-	const TCHAR* ProgressSlot = TEXT("OneStep_Progress_V4");
+	const TCHAR* ProgressSlot = TEXT("OneStep_Progress_V6");
 	const EPlayerRole Roles[] = { EPlayerRole::PlayerA, EPlayerRole::PlayerB };
 
 	const TCHAR* RoleLetter(EPlayerRole Role)
@@ -55,6 +55,33 @@ AGridManager::AGridManager()
 	CharacterClass = AGridPuzzleCharacter::StaticClass();
 }
 
+const UGridLevelDataAsset* AGridManager::CurrentSection() const
+{
+	const UGridLevelDataAsset* Chapter = Levels.IsValidIndex(LevelIndex) ? Levels[LevelIndex].Get() : nullptr;
+	if (!Chapter || Chapter->Sections.IsEmpty()) { return Chapter; }
+	return Chapter->Sections.IsValidIndex(SectionIndex) ? Chapter->Sections[SectionIndex].Get() : nullptr;
+}
+
+int32 AGridManager::GetSectionCount() const
+{
+	return Levels.IsValidIndex(LevelIndex) && Levels[LevelIndex] ? FMath::Max(1, Levels[LevelIndex]->Sections.Num()) : 1;
+}
+
+FText AGridManager::GetSectionTitle() const
+{
+	return CurrentSection() ? CurrentSection()->Title : FText::GetEmpty();
+}
+
+int32 AGridManager::GetSourceLevelIndex() const
+{
+	return CurrentSection() ? CurrentSection()->LegacyChapterIndex : INDEX_NONE;
+}
+
+void AGridManager::SaveUndo(FGridPuzzleRules Previous, EPlayerRole Mover, TArray<FIntPoint> Changed)
+{
+	UndoHistory.Add({MoveTemp(Previous), Mover, MoveTemp(Changed), SectionIndex, ChapterMoveCount});
+}
+
 // 初始化调用链为 GameMode::StartPlay -> Initialize -> ShowMenu -> LoadLevel。
 void AGridManager::Initialize(APlayerController& Controller)
 {
@@ -62,6 +89,14 @@ void AGridManager::Initialize(APlayerController& Controller)
 	if (Levels.IsEmpty())
 	{
 		Levels.Append(CreateDefaultLevels());
+	}
+	// 兼容旧 BP_Board 中的 14 个单关配置，运行时自动组成五章。
+	if (Levels.Num() == 14 && Levels[0] && Levels[0]->Sections.IsEmpty())
+	{
+		TArray<UGridLevelDataAsset*> Original;
+		for (UGridLevelDataAsset* Level : Levels) { Original.Add(Level); }
+		Levels.Reset();
+		Levels.Append(CreateCampaignLevels(Original));
 	}
 	// 第一个挑战关之前均为主线，追加的玩法试玩使用独立的索引区间。
 	const int32 FirstChallenge = Levels.IndexOfByPredicate([](const UGridLevelDataAsset* Level)
@@ -72,18 +107,29 @@ void AGridManager::Initialize(APlayerController& Controller)
 	CampaignLevelCount = Levels.Num();
 	Levels.Append(CreatePrototypeLevels());
 	// 存档只恢复进度与收集项，关内位置和撤销历史从关卡初始状态重建。
-	if (UGameplayStatics::DoesSaveGameExist(ProgressSlot, 0))
+	const bool bLegacyProgress = !UGameplayStatics::DoesSaveGameExist(ProgressSlot, 0);
+	const TCHAR* LoadSlot = bLegacyProgress ? TEXT("OneStep_Progress_V4") : ProgressSlot;
+	if (UGameplayStatics::DoesSaveGameExist(LoadSlot, 0))
 	{
-		if (const UGridPuzzleProgress* Saved = Cast<UGridPuzzleProgress>(UGameplayStatics::LoadGameFromSlot(ProgressSlot, 0)))
+		if (const UGridPuzzleProgress* Saved = Cast<UGridPuzzleProgress>(UGameplayStatics::LoadGameFromSlot(LoadSlot, 0)))
 		{
 			CompletedMainLevels = FMath::Clamp(Saved->CompletedMainLevels, 0, MainLevelCount);
+			if (bLegacyProgress && MainLevelCount == 5)
+			{
+				CompletedMainLevels = 0;
+				for (int32 Threshold : {3, 9, 11, 12, 14})
+				{
+					if (Saved->CompletedMainLevels < Threshold) { break; }
+					++CompletedMainLevels;
+				}
+			}
 			for (const int32 Echo : Saved->EarnedEchoes)
 			{
-				if (Echo >= 0 && Echo < CampaignLevelCount) { EarnedEchoes.Add(Echo); }
+				if (Echo >= 0 && Echo < 14) { EarnedEchoes.Add(Echo); }
 			}
 			for (const int32 Intro : Saved->SeenMechanicIntros)
 			{
-				if (Intro >= 0 && Intro < CampaignLevelCount) { SeenMechanicIntros.Add(Intro); }
+				if (Intro >= 0 && Intro < 14) { SeenMechanicIntros.Add(Intro); }
 			}
 		}
 	}
@@ -172,9 +218,12 @@ void AGridManager::PositionCamera(bool bMenu, bool bOutro)
 }
 
 // 先验证新关卡数据，再清理旧场景并生成新地块与双角色。
-bool AGridManager::LoadLevel(int32 Index)
+bool AGridManager::LoadLevel(int32 Index, int32 Section, bool bContinueChapter)
 {
-	if (!Levels.IsValidIndex(Index) || !Levels[Index] || !Rules.Initialize(*Levels[Index]))
+	const UGridLevelDataAsset* Chapter = Levels.IsValidIndex(Index) ? Levels[Index].Get() : nullptr;
+	const UGridLevelDataAsset* Data = Chapter && !Chapter->Sections.IsEmpty() ?
+		(Chapter->Sections.IsValidIndex(Section) ? Chapter->Sections[Section].Get() : nullptr) : Chapter;
+	if (!Data || !Rules.Initialize(*Data))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Invalid puzzle level at index %d. Check the Blueprint's Levels data assets."), Index);
 		return false;
@@ -191,18 +240,19 @@ bool AGridManager::LoadLevel(int32 Index)
 	}
 	TileActors.Reset();
 	Characters.Reset();
-	UndoHistory.Reset();
+	if (!bContinueChapter) { UndoHistory.Reset(); ChapterMoveCount = 0; }
 	PreviewMarkers.Reset();
 	ReplaySteps.Reset();
 	ReplayStates.Reset();
 	bActionPreview = false;
 	LevelIndex = Index;
+	SectionIndex = Section;
 	ActiveRole = EPlayerRole::PlayerA;
 	Feedback = FText::GetEmpty();
 	UnlockInputAt = 0.f;
 	bEndingReady = false;
-	bMechanicIntroPending = Index < CampaignLevelCount && LevelHasMechanicIntro(Index) &&
-		!SeenMechanicIntros.Contains(Index);
+	bMechanicIntroPending = Index < CampaignLevelCount && LevelHasMechanicIntro(GetSourceLevelIndex()) &&
+		!SeenMechanicIntros.Contains(GetSourceLevelIndex());
 
 	// 规则给出每个格子的坐标与类型，地块 Setup 负责创建模型和标记。
 	for (const auto& Pair : Rules.GetTiles())
@@ -234,7 +284,7 @@ bool AGridManager::LoadLevel(int32 Index)
 		}
 	}
 	FIntPoint EchoPosition;
-	if (GetEchoLocationForLevel(LevelIndex, EchoPosition) && !EarnedEchoes.Contains(LevelIndex))
+	if (GetEchoLocationForLevel(GetSourceLevelIndex(), EchoPosition) && !EarnedEchoes.Contains(GetSourceLevelIndex()))
 	{
 		if (AGridTile* EchoTile = TileActors.FindRef(EchoPosition))
 		{
@@ -336,7 +386,7 @@ void AGridManager::ShowSelection()
 void AGridManager::DismissMechanicIntro()
 {
 	if (Screen != EGridScreen::MechanicIntro) { return; }
-	SeenMechanicIntros.Add(LevelIndex);
+	SeenMechanicIntros.Add(GetSourceLevelIndex());
 	bMechanicIntroPending = false;
 	PersistProgress();
 	SetScreen(EGridScreen::Playing);
@@ -405,17 +455,17 @@ void AGridManager::PersistProgress()
 bool AGridManager::TryCollectEchoAt(FIntPoint Position)
 {
 	FIntPoint EchoPosition;
-	if (!GetEchoLocationForLevel(LevelIndex, EchoPosition) || EchoPosition != Position ||
-		GetLevelEchoName(LevelIndex).IsEmpty() || EarnedEchoes.Contains(LevelIndex))
+	if (!GetEchoLocationForLevel(GetSourceLevelIndex(), EchoPosition) || EchoPosition != Position ||
+		GetLevelEchoName(GetSourceLevelIndex()).IsEmpty() || EarnedEchoes.Contains(GetSourceLevelIndex()))
 	{
 		return false;
 	}
-	EarnedEchoes.Add(LevelIndex);
+	EarnedEchoes.Add(GetSourceLevelIndex());
 	if (AGridTile* EchoTile = TileActors.FindRef(Position))
 	{
 		EchoTile->SetEchoAvailable(false, PaletteMaterial);
 	}
-	SetFeedback(FText::Format(LOCTEXT("EchoCollected", "发现回响 · {0}"), GetLevelEchoName(LevelIndex)));
+	SetFeedback(FText::Format(LOCTEXT("EchoCollected", "发现回响 · {0}"), GetLevelEchoName(GetSourceLevelIndex())));
 	PersistProgress();
 	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
 	return true;
@@ -474,10 +524,18 @@ void AGridManager::UndoMove()
 	GetWorldTimerManager().ClearTimer(ScreenTimer);
 	// 转桥方向与人物位置的差异决定此次恢复使用转桥、换位还是普通行走动画。
 	FUndoStep Step = UndoHistory.Pop(EAllowShrinking::No);
-	const bool bTurned = Step.PreviousRules.GetNextDeck() != Rules.GetNextDeck();
+	const bool bCrossedSection = Step.Section != SectionIndex;
+	if (bCrossedSection)
+	{
+		if (!LoadLevel(LevelIndex, Step.Section, true)) { return; }
+		Step.ChangedTiles.Reset();
+		for (const auto& Pair : Step.PreviousRules.GetTiles()) { Step.ChangedTiles.Add(Pair.Key); }
+	}
+	ChapterMoveCount = Step.ChapterMoves;
+	const bool bTurned = !bCrossedSection && Step.PreviousRules.GetNextDeck() != Rules.GetNextDeck();
 	Rules = MoveTemp(Step.PreviousRules);
 	ActiveRole = Step.Mover;
-	const bool bSwapped = Algo::AllOf(Characters, [this](const AGridPuzzleCharacter* Character)
+	const bool bSwapped = !bCrossedSection && Algo::AllOf(Characters, [this](const AGridPuzzleCharacter* Character)
 		{
 			return Character->GridPosition != Rules.GetPosition(Character->TravelerRole);
 		});
@@ -584,7 +642,7 @@ FText AGridManager::GetLevelTitle(int32 Index) const
 
 FText AGridManager::GetLevelHint() const
 {
-	return Levels.IsValidIndex(LevelIndex) && Levels[LevelIndex] ? Levels[LevelIndex]->Hint :
+	return CurrentSection() ? CurrentSection()->Hint :
 		LOCTEXT("MissingLevel", "关卡数据未配置");
 }
 
@@ -646,7 +704,7 @@ FText AGridManager::GetLevelEchoName(int32 Index) const
 
 FText AGridManager::GetMechanicIntroTitle() const
 {
-	switch (LevelIndex)
+	switch (GetSourceLevelIndex())
 	{
 	case 0: return LOCTEXT("IntroTitle01", "借同伴的脚印");
 	case 2: return LOCTEXT("IntroTitle03", "开关与锁定终点");
@@ -666,7 +724,7 @@ FText AGridManager::GetMechanicIntroTitle() const
 // 引导文案与运行中的规则对应，显示由 SetScreen 和已读存档共同控制。
 FText AGridManager::GetMechanicIntroBody() const
 {
-	switch (LevelIndex)
+	switch (GetSourceLevelIndex())
 	{
 	case 0:
 		return LOCTEXT("IntroBody01",
@@ -708,7 +766,7 @@ FText AGridManager::GetMechanicIntroBody() const
 
 FText AGridManager::GetMechanicIntroExample() const
 {
-	switch (LevelIndex)
+	switch (GetSourceLevelIndex())
 	{
 	case 0: return LOCTEXT("IntroExample01", "A 走过一格留下蓝印 → Tab 切到 B → B 借这枚蓝印前进");
 	case 2: return LOCTEXT("IntroExample03", "让标记对应的角色踩亮开关 → 再去自己的锁门终点");
@@ -728,7 +786,12 @@ FText AGridManager::GetMechanicIntroExample() const
 // 将录制方向转换成界面的箭头序列，显示已经录入的步数。
 FText AGridManager::GetRecordingStatus() const
 {
-	if (Levels[LevelIndex]->Prototype != EGridPrototype::RecordRoute) { return FText::GetEmpty(); }
+	if (CurrentSection() && !CurrentSection()->RhythmTiles.IsEmpty())
+	{
+		return FText::Format(LOCTEXT("RhythmStatus", "下一次落脚 · 第 {0}/{1} 拍  |  BEAT WAIT 时请同伴让拍"),
+			FText::AsNumber((Rules.GetMoveCount() + 1) % Rules.GetRhythmPeriod() + 1), FText::AsNumber(Rules.GetRhythmPeriod()));
+	}
+	if (CurrentSection()->Prototype != EGridPrototype::RecordRoute) { return FText::GetEmpty(); }
 	const TArray<FIntPoint>& Directions = Rules.GetRecording();
 	if (!Rules.IsRecording() && Directions.IsEmpty()) { return FText::GetEmpty(); }
 	FString Sequence;
@@ -765,7 +828,7 @@ void AGridManager::MarkActionTile(FIntPoint Position, FText Label, FColor Color)
 // 规则已完成换槽，这里让新槽位的模型从旧位置沿轴心转入。
 void AGridManager::AnimateTurnedDeck(const TArray<FIntPoint>& ChangedTiles, bool bReverse)
 {
-	const FVector Pivot = ToWorld(Levels[LevelIndex]->TurnPivot);
+	const FVector Pivot = ToWorld(CurrentSection()->TurnPivot);
 	for (int32 Index = 0; Index + 1 < ChangedTiles.Num(); Index += 2)
 	{
 		const FIntPoint From = ChangedTiles[Index + (bReverse ? 1 : 0)];
@@ -782,7 +845,7 @@ void AGridManager::UseAction()
 		GetWorld()->GetTimeSeconds() < UnlockInputAt) { return; }
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
 	FGridPuzzleRules Trial = Rules;
-	EGridPrototype Interaction = Levels[LevelIndex]->Prototype;
+	EGridPrototype Interaction = CurrentSection()->Prototype;
 	// 组合机关优先执行已满足的换位，尚不能换位时允许在 TURN 控制格转桥。
 	if (Interaction == EGridPrototype::TurnBridgeAndSwap)
 	{
@@ -815,7 +878,7 @@ void AGridManager::UseAction()
 			return;
 		}
 		ClearActionPreview();
-		UndoHistory.Add({MoveTemp(Rules), ActiveRole, Changed});
+		SaveUndo(MoveTemp(Rules), ActiveRole, Changed);
 		Rules = MoveTemp(Trial);
 		bool bCollapsed = false;
 		bool bBridgeChanged = false;
@@ -830,7 +893,7 @@ void AGridManager::UseAction()
 	{
 		if (Trial.StartRecording(ActiveRole))
 		{
-			UndoHistory.Add({MoveTemp(Rules), ActiveRole, {}});
+			SaveUndo(MoveTemp(Rules), ActiveRole, {});
 			Rules = MoveTemp(Trial);
 			SetFeedback(LOCTEXT("RecordStarted", "已开始录印。记录 A 接下来的三次成功移动"));
 			return;
@@ -874,7 +937,7 @@ void AGridManager::UseAction()
 			for (FIntPoint Position : Step.ChangedTiles) { Changed.AddUnique(Position); }
 		}
 		// 整段三步回放共用一个撤销快照，播放期间锁住其他移动输入。
-		UndoHistory.Add({Rules, ActiveRole, MoveTemp(Changed)});
+		SaveUndo(Rules, ActiveRole, MoveTemp(Changed));
 		ReplayIndex = 0;
 		ReplaySteps = MoveTemp(Steps);
 		ReplayStates = MoveTemp(States);
@@ -898,7 +961,7 @@ void AGridManager::UseAction()
 			return;
 		}
 		ClearActionPreview();
-		UndoHistory.Add({MoveTemp(Rules), ActiveRole, Move.ChangedTiles});
+		SaveUndo(MoveTemp(Rules), ActiveRole, Move.ChangedTiles);
 		Rules = MoveTemp(Trial);
 		bool bCollapsed = false;
 		bool bBridgeChanged = false;
@@ -926,16 +989,18 @@ void AGridManager::UseAction()
 void AGridManager::PlayReplayStep()
 {
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
+	const float Duration = StepTime * FMath::Max(1, ReplaySteps[ReplayIndex].Path.Num());
 	Rules = MoveTemp(ReplayStates[ReplayIndex]);
 	PresentMove(EPlayerRole::PlayerB, ReplaySteps[ReplayIndex]);
 	if (++ReplayIndex == ReplaySteps.Num())
 	{
 		ReplaySteps.Reset();
 		ReplayStates.Reset();
+		CheckCompletion();
 		SetFeedback(LOCTEXT("ReplayDone", "已接过同伴的三步"));
 		return;
 	}
-	GetWorldTimerManager().SetTimer(ReplayTimer, this, &AGridManager::PlayReplayStep, StepTime, false);
+	GetWorldTimerManager().SetTimer(ReplayTimer, this, &AGridManager::PlayReplayStep, Duration, false);
 }
 
 // 正常输入入口，先调用规则判定，成功后呈现并保存撤销快照。
@@ -956,6 +1021,9 @@ void AGridManager::Move(FIntPoint Direction)
 		FText Reason;
 		switch (MoveResult.Result)
 		{
+		case EGridMoveResult::CrateBlocked: Reason = LOCTEXT("CrateBlocked", "箱子后面需要空闲印板，先给同伴让出推箱位置"); break;
+		case EGridMoveResult::RhythmClosed: Reason = LOCTEXT("RhythmClosed", "下一拍关门，让同伴先踩一步来让拍"); break;
+		case EGridMoveResult::PatrolBlocked: Reason = LOCTEXT("PatrolBlocked", "巡逻将经过这里，让另一人先沿脚印脱离危险"); break;
 		case EGridMoveResult::OwnFootprint: Reason = LOCTEXT("OwnPrint", "这是你留下的脚印，交给同伴吧"); break;
 		case EGridMoveResult::EmptyPrint: Reason = LOCTEXT("EmptyPrint", "这格还没有脚印，等同伴留下印记。"); break;
 		case EGridMoveResult::Occupied: Reason = LOCTEXT("Occupied", "同伴正站在这一格"); break;
@@ -977,16 +1045,17 @@ void AGridManager::Move(FIntPoint Direction)
 		return;
 	}
 	PresentMove(Mover, MoveResult);
-	UndoHistory.Add({MoveTemp(PreviousRules), Mover, MoveTemp(MoveResult.ChangedTiles)});
+	SaveUndo(MoveTemp(PreviousRules), Mover, MoveTemp(MoveResult.ChangedTiles));
 	CheckCompletion();
 }
 
 // 将已经结算的规则结果转换成走路动画、地块刷新、事件通知与音效。
 void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 {
-	UnlockInputAt = GetWorld()->GetTimeSeconds() + StepTime;
+	const float Duration = StepTime * FMath::Max(1, MoveResult.Path.Num());
+	UnlockInputAt = GetWorld()->GetTimeSeconds() + Duration;
 	Feedback = FText::GetEmpty();
-	Characters[FGridPuzzleRules::RoleIndex(Mover)]->MoveTo(MoveResult.To, ToWorld(MoveResult.To), StepTime);
+	Characters[FGridPuzzleRules::RoleIndex(Mover)]->MoveTo(MoveResult.To, ToWorld(MoveResult.To), Duration);
 	bool bCollapsed = false;
 	bool bBridgeChanged = false;
 	const FTileData Destination = Rules.GetTiles().FindChecked(MoveResult.To);
@@ -1052,6 +1121,17 @@ void AGridManager::CheckCompletion()
 {
 	if (Rules.IsComplete())
 	{
+		const float AnimationRemaining = FMath::Max(0.f, UnlockInputAt - GetWorld()->GetTimeSeconds());
+		if (SectionIndex + 1 < GetSectionCount())
+		{
+			SetScreen(EGridScreen::Transition);
+			GetWorldTimerManager().SetTimer(ScreenTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
+			{
+				ChapterMoveCount += Rules.GetMoveCount();
+				if (LoadLevel(LevelIndex, SectionIndex + 1, true)) { SetScreen(EGridScreen::Playing); }
+			}), FMath::Max(StepTime * 2.f, AnimationRemaining + .1f), false);
+			return;
+		}
 		SaveLevelProgress();
 		SetScreen(EGridScreen::Transition);
 		OnLevelCompleted.Broadcast();
@@ -1059,7 +1139,7 @@ void AGridManager::CheckCompletion()
 		GetWorldTimerManager().SetTimer(ScreenTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
 		{
 			SetScreen(EGridScreen::Complete);
-		}), .85f, false);
+		}), FMath::Max(.85f, AnimationRemaining + .1f), false);
 	}
 }
 

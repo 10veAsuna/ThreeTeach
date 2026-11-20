@@ -57,6 +57,11 @@ private:
 
 	// 可见几何体集中挂在 Pieces 下，坍塌或转桥时可整体做局部变换。
 	UPROPERTY() TObjectPtr<USceneComponent> Pieces;
+	UPROPERTY() TObjectPtr<UMaterialInterface> VisualMaterial;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> CrateMesh;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> PatrolMesh;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> PatrolWarning;
+	UPROPERTY() TObjectPtr<UTextRenderComponent> FusionLabel;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Top;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Trim;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Portal;
