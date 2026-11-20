@@ -13,6 +13,7 @@ class UTextRenderComponent;
 
 enum class EGridShape : uint8 { Cube, Cylinder, Cone, Sphere };
 
+// 地块、人物与背景共用的几何体和材质工具。
 namespace GridVisuals
 {
 	FLinearColor RoleColor(EPlayerRole Role);
@@ -22,6 +23,7 @@ namespace GridVisuals
 	void Paint(UStaticMeshComponent* Mesh, FLinearColor Color, float Glow = 0.f);
 }
 
+// 一个格子的可视 Actor，接收规则层的 FTileData 来绘制石板、脚印和机关标识。
 UCLASS(Blueprintable)
 class GAMEJAM_API AGridTile : public AActor
 {
@@ -29,6 +31,7 @@ class GAMEJAM_API AGridTile : public AActor
 
 public:
 	AGridTile();
+	// 管理器生成地块后调用 Setup 创建组件，之后用 Update 同步规则状态。
 	void Setup(const FTileData& Data, UMaterialInterface* Material);
 	void Update(const FTileData& Data, bool bPulse);
 	void FaceMarker(const FRotator& Rotation);
@@ -44,6 +47,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Look") FLinearColor MemoryStone = FLinearColor(.28f,.38f,.43f);
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Look") FLinearColor NormalStone = FLinearColor(.13f,.21f,.27f);
 
+	// 派生蓝图可以追加表现，地块判定仍通过管理器调用规则层。
 	UFUNCTION(BlueprintImplementableEvent, Category="Puzzle") void OnTileUpdated(FTileData State, bool bFootprintChanged);
 	UFUNCTION(BlueprintImplementableEvent, Category="Puzzle") void OnTileCollapsed();
 
@@ -51,6 +55,7 @@ private:
 	void MakeFootprints(UMaterialInterface* Material);
 	virtual void Tick(float DeltaSeconds) override;
 
+	// 可见几何体集中挂在 Pieces 下，坍塌或转桥时可整体做局部变换。
 	UPROPERTY() TObjectPtr<USceneComponent> Pieces;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Top;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Trim;
@@ -61,6 +66,7 @@ private:
 	UPROPERTY() TObjectPtr<UTextRenderComponent> ActionMarker;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoMarker;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoHalo;
+	// 两种颜色的脚印组件预先创建，刷新时按归属切换可见性。
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> BluePrints;
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> OrangePrints;
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> Countdown;
@@ -77,6 +83,7 @@ private:
 	bool bEchoAvailable = false;
 };
 
+// 拼装式人物 Actor，逻辑坐标来自规则层，世界坐标通过短时插值呈现移动。
 UCLASS(Blueprintable)
 class GAMEJAM_API AGridPuzzleCharacter : public AActor
 {
@@ -85,6 +92,7 @@ class GAMEJAM_API AGridPuzzleCharacter : public AActor
 public:
 	AGridPuzzleCharacter();
 	void Setup(EPlayerRole NewRole, FIntPoint Start, UMaterialInterface* Material);
+	// bCurve 用于换位时的弧线动画，普通行走沿两格之间的直线过渡。
 	void MoveTo(FIntPoint Destination, FVector WorldDestination, float Duration, bool bCurve = false);
 	void RejectMove(FVector WorldDirection);
 	void SetControlState(bool bControlled, bool bFinished);
@@ -99,6 +107,7 @@ public:
 private:
 	virtual void Tick(float DeltaSeconds) override;
 
+	// 身体部件统一挂到 Figure，便于整体转向和添加行走起伏。
 	UPROPERTY() TObjectPtr<USceneComponent> Figure;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Selection;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Shadow;

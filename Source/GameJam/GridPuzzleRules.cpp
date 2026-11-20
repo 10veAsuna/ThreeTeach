@@ -2,6 +2,7 @@
 
 #include "Algo/AllOf.h"
 
+// 从资源重建规则状态，先在临时对象中完成布局解析和机关校验。
 bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 {
 	FGridPuzzleRules Initial;
@@ -14,6 +15,7 @@ bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 	bool bHasLockedGoal = false;
 	TSet<FString> BridgeMarkers;
 
+	// 字符地图转换成坐标索引，空格跳过，因此没有地块的坐标自然形成虚空。
 	for (int32 Y = 0; Y < Level.Rows.Num(); ++Y)
 	{
 		const FString& Row = Level.Rows[Y];
@@ -88,12 +90,14 @@ bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 		}
 	}
 
+	// 每名角色必须各有一个起点和终点，上锁出口还需要至少一个开关。
 	if (Starts[0] != 1 || Starts[1] != 1 || Goals[0] != 1 || Goals[1] != 1 ||
 		(bHasLockedGoal && Switches == 0))
 	{
 		return false;
 	}
 
+	// 校验桥组引用，保证后续 FindChecked 访问的桥与条件源都有有效配置。
 	TMap<FIntPoint, EPlayerRole> PlateRoles;
 	for (const FGridBridgeDefinition& Bridge : Level.Bridges)
 	{
@@ -130,6 +134,7 @@ bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 		return false;
 	}
 
+	// 寄印源、接收端与触发格需要兼容，搬运时也要避免源目标互相覆盖。
 	for (const FGridPrintEffect& Effect : Level.PrintEffects)
 	{
 		FTileData* Trigger = Initial.Tiles.Find(Effect.Trigger);
@@ -170,10 +175,12 @@ bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 	}
 	Initial.PrintEffects = Level.PrintEffects;
 	if (!Initial.InitializePrototype(Level)) { return false; }
+	// 到这里整关配置已有效，可以一次性提交新局面。
 	*this = MoveTemp(Initial);
 	return true;
 }
 
+// 为转桥补建备用朝向槽位，并检查回放与换位所需的印板。
 bool FGridPuzzleRules::InitializePrototype(const UGridLevelDataAsset& Level)
 {
 	Prototype = Level.Prototype;
@@ -198,6 +205,7 @@ bool FGridPuzzleRules::InitializePrototype(const UGridLevelDataAsset& Level)
 				Tile->TileType != ETileType::Memory)) { return false; }
 			Tile->InteractionLabel = TEXT("TURN");
 		}
+		// 两套桥面必须围绕同一轴心整体旋转 90 度，且备用落点不可覆盖现有地块。
 		bool bClockwise = true;
 		bool bCounterclockwise = true;
 		for (int32 Index = 0; Index < Level.InitialDeck.Num(); ++Index)
@@ -251,6 +259,7 @@ bool FGridPuzzleRules::InitializePrototype(const UGridLevelDataAsset& Level)
 	return true;
 }
 
+// 压板检查角色实时站位，印板检查留存的脚印颜色。
 bool FGridPuzzleRules::IsBridgeConditionMet(const FGridBridgeCondition& Condition) const
 {
 	const FTileData& Source = Tiles.FindChecked(Condition.Source);
@@ -264,6 +273,7 @@ bool FGridPuzzleRules::IsBridgeConditionMet(const FGridBridgeCondition& Conditio
 	return Source.FootprintOwner == RequiredOwner;
 }
 
+// 普通移动入口，只有 A 的成功移动会追加到正在录制的三步方向中。
 FGridMove FGridPuzzleRules::TryMove(EPlayerRole Role, FIntPoint Direction)
 {
 	FGridMove Move = MoveCharacter(Role, Direction, false);
@@ -275,6 +285,7 @@ FGridMove FGridPuzzleRules::TryMove(EPlayerRole Role, FIntPoint Direction)
 	return Move;
 }
 
+// 再次从 REC 开始录制时覆盖旧方向序列。
 bool FGridPuzzleRules::StartRecording(EPlayerRole Role)
 {
 	if (Prototype != EGridPrototype::RecordRoute || Role != EPlayerRole::PlayerA ||
@@ -284,12 +295,15 @@ bool FGridPuzzleRules::StartRecording(EPlayerRole Role)
 	return true;
 }
 
+// 回放由 B 在 PLAY 发起，必须已经录满三步。
 bool FGridPuzzleRules::CanReplayFrom(EPlayerRole Role) const
 {
 	return Prototype == EGridPrototype::RecordRoute && Role == EPlayerRole::PlayerB && !IsFinished(Role) &&
 		GetPosition(Role) == ReplayStart && Recording.Num() == RecordedLength;
 }
 
+// 在 Trial 上逐步试算，任一步失败就丢弃快照，原局面保持完整。
+// Steps 保留到失败那一步，便于界面标出阻挡位置。
 bool FGridPuzzleRules::PlanReplay(EPlayerRole Role, TArray<FGridMove>& Steps, TArray<FGridPuzzleRules>& States) const
 {
 	Steps.Reset();
@@ -314,6 +328,8 @@ bool FGridPuzzleRules::IsAtTurnControl(EPlayerRole Role) const
 	return !IsFinished(Role) && TurnControls.Contains(GetPosition(Role));
 }
 
+// 桥面上无人时，将每块石板的脚印搬到对应的新槽位，同时隐藏旧槽位。
+// 转桥本身不增加 MoveCount，也不推进成功行走所驱动的倒计时。
 bool FGridPuzzleRules::TryTurnBridge(EPlayerRole Role, TArray<FIntPoint>& Changed)
 {
 	Changed.Reset();
@@ -344,6 +360,7 @@ bool FGridPuzzleRules::TryTurnBridge(EPlayerRole Role, TArray<FIntPoint>& Change
 	return true;
 }
 
+// 两人的脚下都要是刚写出的自身脚印，换位时才能同时借到对方的脚印。
 bool FGridPuzzleRules::CanSwap() const
 {
 	if (Finished[0] || Finished[1] || !SwapTiles.Contains(Positions[0]) || !SwapTiles.Contains(Positions[1]))
@@ -356,6 +373,7 @@ bool FGridPuzzleRules::CanSwap() const
 		Orange.bFreshPrint && Orange.FootprintOwner == EFootprintOwner::PlayerB;
 }
 
+// 换位以一个完整行动结算，两名角色的位置与对应地块的脚印一起交换。
 bool FGridPuzzleRules::TrySwap(EPlayerRole Role, FGridMove& Move)
 {
 	if (!CanSwap()) { return false; }
@@ -376,6 +394,7 @@ bool FGridPuzzleRules::TrySwap(EPlayerRole Role, FGridMove& Move)
 	return true;
 }
 
+// 核心移动判定。前半段只校验条件，通过后才写回位置、脚印与机关状态。
 FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction, bool bReplaying)
 {
 	const int32 Index = RoleIndex(Role);
@@ -400,6 +419,7 @@ FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction,
 	if (Destination->TileType == ETileType::Obstacle) { Move.Result = EGridMoveResult::Blocked; return Move; }
 	if (Destination->bIsOccupied) { Move.Result = EGridMoveResult::Occupied; return Move; }
 	if (Destination->bIsCollapsed) { Move.Result = EGridMoveResult::Collapsed; return Move; }
+	// 主题规则在这里统一执行，禁止踩自己的印，严格模式也禁止踏入空印格。
 	if (Destination->FootprintOwner == Owner) { Move.Result = EGridMoveResult::OwnFootprint; return Move; }
 	if (bRequireBorrowedPrints && Destination->HasFootprints() && Destination->FootprintOwner == EFootprintOwner::None)
 	{
@@ -422,6 +442,7 @@ FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction,
 		if (Destination->bIsLocked) { Move.Result = EGridMoveResult::LockedGoal; return Move; }
 	}
 
+	// 所有检查通过，从这里开始提交成功行动，拒绝的输入不会消耗步数。
 	Move.Result = EGridMoveResult::Moved;
 	++MoveCount;
 	FTileData& Source = Tiles.FindChecked(Move.From);
@@ -438,12 +459,14 @@ FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction,
 	{
 		Destination->bIsActivated = Destination->SwitchRole == Role;
 	}
+	// 借来的脚印在落脚后改成自己的颜色，形成下一次供同伴借用的路。
 	if (Destination->HasFootprints())
 	{
 		Move.bFootprintTransferred = Destination->FootprintOwner != EFootprintOwner::None;
 		Destination->FootprintOwner = Owner;
 		Destination->bFreshPrint = true;
 	}
+	// 一次性印板离开即塌，易碎板落脚时恢复完整寿命，后续由 ResolveStep 扣时。
 	if (Source.TileType == ETileType::SingleUse)
 	{
 		Source.bIsCollapsed = true;
@@ -466,6 +489,7 @@ FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction,
 	return Move;
 }
 
+// 成功行动的统一收尾，按顺序处理解锁、易碎倒计时、寄印与桥条件。
 void FGridPuzzleRules::ResolveStep(FGridMove& Move, EFootprintOwner Owner)
 {
 	for (TPair<FIntPoint, FTileData>& Entry : Tiles)
@@ -478,6 +502,7 @@ void FGridPuzzleRules::ResolveStep(FGridMove& Move, EFootprintOwner Owner)
 		}
 
 		// Fresh prints start their countdown after departure. Preprinted stone waits for its first traveler.
+		// 占用中、未实际踩过以及本次刚离开的格子跳过扣时，给同伴保留交接窗口。
 		if (Tile.TileType != ETileType::Fragile || Tile.bIsOccupied || Tile.bIsCollapsed ||
 			!Tile.bFreshPrint || Entry.Key == Move.From)
 		{
@@ -491,6 +516,7 @@ void FGridPuzzleRules::ResolveStep(FGridMove& Move, EFootprintOwner Owner)
 
 	// Entry used the previous bridge state. Recompute after the whole step so a
 	// traveler can leave a bridge that closed beneath them during that step.
+	// 入桥使用行动前的开合状态，整步结束后重新计算，使角色能从刚关闭的桥上离开。
 	for (TPair<FIntPoint, FTileData>& Entry : Tiles)
 	{
 		FTileData& Tile = Entry.Value;
@@ -507,6 +533,7 @@ void FGridPuzzleRules::ResolveStep(FGridMove& Move, EFootprintOwner Owner)
 	}
 }
 
+// 一组寄印需要全部接收格都空闲，避免一半送达造成不完整局面。
 bool FGridPuzzleRules::ArePrintTargetsFree(const TArray<FPrintWrite>& Writes) const
 {
 	return Algo::AllOf(Writes, [this](const FPrintWrite& Write)
@@ -515,6 +542,7 @@ bool FGridPuzzleRules::ArePrintTargetsFree(const TArray<FPrintWrite>& Writes) co
 	});
 }
 
+// 寄印写回目标格，并把变化记录交给表现层刷新颜色。
 void FGridPuzzleRules::ApplyPrintWrites(const TArray<FPrintWrite>& Writes, FGridMove& Move)
 {
 	for (const FPrintWrite& Write : Writes)
@@ -527,6 +555,7 @@ void FGridPuzzleRules::ApplyPrintWrites(const TArray<FPrintWrite>& Writes, FGrid
 	Move.bSentPrint = true;
 }
 
+// 先推进旧包裹，再处理本步触发的新寄印，最后刷新接收端的 WAIT 标记。
 void FGridPuzzleRules::UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner)
 {
 	for (int32 Index = 0; Index < PendingPrints.Num();)
@@ -556,6 +585,7 @@ void FGridPuzzleRules::UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner
 			continue;
 		}
 
+		// 读取触发这一刻的源印快照，延迟期间源格再变色也不会更改包裹内容。
 		TArray<FPrintWrite> Writes;
 		for (const FGridPrintLink& Link : Effect.Links)
 		{
@@ -570,6 +600,7 @@ void FGridPuzzleRules::UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner
 		}
 		if (Writes.IsEmpty()) { continue; }
 
+		// 搬运在发件时清除源印，副本与源印都包含在同一份可撤销状态中。
 		if (Effect.bMovePrint)
 		{
 			for (const FGridPrintLink& Link : Effect.Links)

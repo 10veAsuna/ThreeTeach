@@ -15,6 +15,7 @@
 
 #define LOCTEXT_NAMESPACE "GridPuzzleScreen"
 
+// 菜单、HUD 与结算界面使用 Slate 在 C++ 中构建，交互按钮调用管理器的公共接口。
 namespace
 {
 	const FLinearColor Ink(.83f,.92f,.92f);
@@ -25,6 +26,7 @@ namespace
 	const FLinearColor Dim(.006f,.015f,.026f,.72f);
 	const FSlateColorBrush Fill(FLinearColor::White);
 
+	// 中文文本使用引擎自带的回退字体，英文强调文字复用默认粗体。
 	FSlateFontInfo Font(int32 Size, bool bLatin)
 	{
 		if (bLatin) { return FCoreStyle::GetDefaultFontStyle("Bold", Size); }
@@ -41,6 +43,7 @@ namespace
 		return SNew(SBorder).BorderImage(&Fill).BorderBackgroundColor(Color).Padding(Padding)[Content];
 	}
 
+	// 统一按钮的颜色、内边距与交互样式，避免各页面重复设置。
 	TSharedRef<SWidget> ActionButton(FText Label, FOnClicked Action, bool bPrimary = false, bool bEnabled = true)
 	{
 		static const FButtonStyle Primary = FButtonStyle()
@@ -61,6 +64,7 @@ namespace
 			[Text(MoveTemp(Label), 20, bPrimary ? Ink : Muted)];
 	}
 
+	// 回调通过弱引用访问管理器，Actor 已销毁时跳过调用。
 	TSharedRef<SWidget> Button(FText Label, TWeakObjectPtr<AGridManager> Manager,
 		void (AGridManager::*Action)(), bool bPrimary = false)
 	{
@@ -71,6 +75,7 @@ namespace
 			}), bPrimary);
 	}
 
+	// 主菜单按钮根据存档选择显示开始或继续，并展示回响收集进度。
 	TSharedRef<SWidget> Menu(AGridManager& Manager)
 	{
 		return SNew(SVerticalBox)
@@ -102,6 +107,7 @@ namespace
 			[Button(LOCTEXT("Exit", "退出游戏"), &Manager, &AGridManager::Exit)];
 	}
 
+	// 使用同一份 Levels 数组排列主线、挑战和试玩，解锁条件交给管理器判断。
 	TSharedRef<SWidget> LevelSelection(AGridManager& Manager)
 	{
 		const TWeakObjectPtr<AGridManager> Weak(&Manager);
@@ -158,6 +164,7 @@ namespace
 		return Card(Body, Panel, FMargin(30,26));
 	}
 
+	// 绑定动态属性读取当前角色状态，切换人物时可直接刷新文本和背景。
 	TSharedRef<SWidget> RoleStatus(TWeakObjectPtr<AGridManager> Manager, EPlayerRole Role)
 	{
 		const bool bBlue = Role == EPlayerRole::PlayerA;
@@ -186,6 +193,7 @@ namespace
 		];
 	}
 
+	// 游玩 HUD 显示关卡、角色、录制序列、规则反馈和步数。
 	void AddHUD(SOverlay& Layout, AGridManager& Manager)
 	{
 		const TWeakObjectPtr<AGridManager> Weak(&Manager);
@@ -245,6 +253,7 @@ namespace
 		];
 	}
 
+	// 暂停、操作说明、机关引导与通关页共享居中弹层的布局方式。
 	TSharedRef<SWidget> Modal(AGridManager& Manager)
 	{
 		TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
@@ -364,6 +373,7 @@ namespace
 	}
 }
 
+// 根据界面状态组装控件树，统一放进固定设计尺寸的缩放容器。
 TSharedRef<SWidget> MakeGridPuzzleScreen(AGridManager& Manager)
 {
 	TSharedRef<SOverlay> Layout = SNew(SOverlay);
@@ -413,6 +423,7 @@ TSharedRef<SWidget> MakeGridPuzzleScreen(AGridManager& Manager)
 			Layout->AddSlot().HAlign(HAlign_Center).VAlign(VAlign_Center)[Modal(Manager)];
 		}
 	}
+	// 以 1400×788 为设计画布缩放到当前窗口，保持 HUD 与菜单的相对布局。
 	Frame->AddSlot()
 	[
 		SNew(SScaleBox).Stretch(EStretch::ScaleToFit)

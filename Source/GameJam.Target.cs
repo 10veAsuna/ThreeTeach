@@ -3,6 +3,7 @@
 using UnrealBuildTool;
 using System.Collections.Generic;
 
+// 独立游戏目标，打包或构建 GameJam 可执行程序时使用。
 public class GameJamTarget : TargetRules
 {
 	public GameJamTarget(TargetInfo Target) : base(Target)

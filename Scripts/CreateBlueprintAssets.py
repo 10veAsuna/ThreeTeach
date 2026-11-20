@@ -1,4 +1,6 @@
 # Run from Unreal Editor's Python script menu after building GameJamEditor.
+# 在 UE 中编译 GameJamEditor 后，从“工具 -> 执行 Python 脚本”运行此文件。
+# 本脚本负责创建和配置资源，运行时场景由 GameMode 与 GridManager 生成。
 import unreal as ue
 
 ROOT = '/Game/OneStep'
@@ -9,6 +11,7 @@ def path(name, folder=''):
     return f'{ROOT}/{folder}/{name}' if folder else f'{ROOT}/{name}'
 
 def asset(name, folder, cls, factory):
+    # 优先复用同路径资源，使重复运行时保留已有的关卡和材质编辑结果。
     existing = ASSETS.load_asset(path(name, folder)) if ASSETS.does_asset_exist(path(name, folder)) else None
     if existing:
         return existing
@@ -18,16 +21,19 @@ def asset(name, folder, cls, factory):
     return created
 
 def blueprint(name, parent):
+    # 蓝图继承项目中的 C++ 类，默认对象用于写入类级别的可编辑配置。
     factory = ue.BlueprintFactory()
     factory.set_editor_property('parent_class', parent)
     bp = asset(name, 'Blueprints', ue.Blueprint, factory)
     return bp, ue.get_default_object(bp.generated_class())
 
 def save(obj):
+    # 保存失败时立即报错，便于从 UE 输出日志定位未落盘的资源。
     if not ASSETS.save_loaded_asset(obj, False):
         raise RuntimeError(f'Could not save {obj.get_path_name()}')
 
 def material():
+    # Tint 控制基础色，Glow 控制自发光，C++ 为各组件生成独立动态材质实例。
     mat = asset('M_Stone', 'Art', ue.Material, ue.MaterialFactoryNew())
     lib = ue.MaterialEditingLibrary
     if lib.get_num_material_expressions(mat) > 0:
@@ -54,6 +60,7 @@ def main():
     palette = material()
     levels = []
     for i, default in enumerate(ue.GridManager.create_default_levels(), 1):
+        # 普通关卡使用 V4 目录，带转桥、录制或换位的关卡使用 V5 目录。
         factory = ue.DataAssetFactory()
         factory.set_editor_property('data_asset_class', ue.GridLevelDataAsset)
         version = 'V4' if default.get_editor_property('prototype') == ue.GridPrototype.NONE else 'V5'
@@ -62,6 +69,7 @@ def main():
         existed = ASSETS.does_asset_exist(path(name, folder))
         level = asset(name, folder, ue.GridLevelDataAsset, factory)
         if not existed:
+            # 新建关卡从 C++ 默认定义复制字段，已存在的关卡保留资源内的配置。
             for field in ('title', 'hint', 'rows', 'fragile_lifetime', 'bridges', 'print_effects',
                           'require_borrowed_prints', 'challenge', 'prototype', 'turn_controls', 'turn_pivot',
                           'initial_deck', 'alternate_deck', 'record_start', 'replay_start', 'replay_tiles', 'swap_tiles'):
@@ -78,6 +86,7 @@ def main():
     character_defaults.set_editor_property('scarf_color', ue.LinearColor(0.82, 0.78, 0.61))
     save(character)
 
+    # 管理器蓝图把关卡数组、地块类、人物类与调色材质连接起来。
     manager, manager_defaults = blueprint('BP_Board', ue.GridManager)
     manager_defaults.set_editor_property('levels', levels)
     manager_defaults.set_editor_property('tile_class', tile.generated_class())
@@ -85,6 +94,7 @@ def main():
     manager_defaults.set_editor_property('palette_material', palette)
     save(manager)
 
+    # DefaultEngine.ini 指向这个 GameMode，运行时通过它生成 BP_Board。
     game, game_defaults = blueprint('BP_OneStepGame', ue.GridPuzzleGameMode)
     game_defaults.set_editor_property('manager_class', manager.generated_class())
     save(game)

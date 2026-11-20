@@ -3,8 +3,10 @@
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundWaveProcedural.h"
 
+// 根据事件生成单声道 PCM 数据，通过 USoundWaveProcedural 播放。
 void PlayGridSound(UObject* Context, EGridSound Sound)
 {
+	// 每行依次配置时长、主频、后续叠加频率和音量，顺序对应 EGridSound。
 	static constexpr struct
 	{
 		float Duration;
@@ -29,11 +31,13 @@ void PlayGridSound(UObject* Context, EGridSound Sound)
 	const int32 SampleCount = FMath::CeilToInt(Cue.Duration * SampleRate);
 	TArray<int16> Data;
 	Data.SetNumUninitialized(SampleCount);
+	// 固定种子让同一类事件的噪声表现一致，步伐与坍塌会混入短促噪声。
 	FRandomStream Random(201 + static_cast<int32>(Sound));
 	for (int32 Index = 0; Index < SampleCount; ++Index)
 	{
 		const float Time = static_cast<float>(Index) / SampleRate;
 		const float Progress = Time / Cue.Duration;
+		// 快速起音后逐渐衰减，避免采样从高振幅突然开始或结束。
 		const float Envelope = FMath::Min(Time * 125.f, 1.f) * FMath::Square(1.f - Progress);
 		const float Phase = 2.f * PI * Cue.Pitch * Time;
 		float Signal = .58f * FMath::Sin(Phase) + .14f * FMath::Sin(2.003f * Phase);
@@ -53,6 +57,7 @@ void PlayGridSound(UObject* Context, EGridSound Sound)
 	Wave->NumChannels = 1;
 	Wave->Duration = Cue.Duration;
 	Wave->bLooping = false;
+	// 采样缓冲以字节入队，再交给 UE 音频系统播放。
 	Wave->QueueAudio(reinterpret_cast<const uint8*>(Data.GetData()), Data.Num() * sizeof(int16));
 	UGameplayStatics::PlaySound2D(Context, Wave);
 }

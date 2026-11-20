@@ -2,9 +2,12 @@
 
 #define LOCTEXT_NAMESPACE "GridPuzzleChaptersV4"
 
+// 默认关卡的数据源，Rows 使用从左上角开始的网格坐标，符号含义见 GridPuzzleRules.h。
+// Python 首次生成 Data Asset 时复制这些字段，已有资源会保留各自的编辑结果。
 TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 {
 	TArray<UGridLevelDataAsset*> Result;
+	// 所有默认关卡启用严格借印，记忆地块需要同伴脚印才能进入。
 	const auto Add = [&Result](FText Title, FText Hint, TArray<FString> Rows, int32 Lifetime = 3, bool bChallenge = false)
 	{
 		UGridLevelDataAsset* Level = NewObject<UGridLevelDataAsset>();
@@ -17,6 +20,8 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 		Result.Add(Level);
 		return Level;
 	};
+	// 为某个触发格配置寄印，Links 指定源目标，Requirements 指定前置脚印条件。
+	// Delay 为后续成功行动数，bOnce 表示只触发一次，bMove 表示取走源脚印。
 	const auto Print = [](UGridLevelDataAsset& Level, FIntPoint Trigger, EFootprintOwner RequiredPrint,
 		TArray<FGridPrintLink> Links, TArray<FGridBridgeCondition> Requirements = {},
 		int32 Delay = 0, bool bOnce = false, bool bMove = false)
@@ -32,10 +37,12 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	};
 	constexpr EFootprintOwner A = EFootprintOwner::PlayerA;
 	constexpr EFootprintOwner B = EFootprintOwner::PlayerB;
+	// 在触发条件中，None 表示允许任意角色触发，实际送出的颜色仍从源格读取。
 	constexpr EFootprintOwner Any = EFootprintOwner::None;
 	constexpr EPlayerRole RoleA = EPlayerRole::PlayerA;
 	constexpr EPlayerRole RoleB = EPlayerRole::PlayerB;
 
+	// 第 1 关介绍交替借印，A 改写中央印记后，B 才能沿新脚印跟上。
 	Add(LOCTEXT("Chapter01", "把下一步留给你"),
 		LOCTEXT("Hint01", "看脚印的主人。A 先走中间的橙印，离开后 B 才能跟上。"), {
 		TEXT("  a"),
@@ -45,12 +52,14 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 		TEXT("  b")
 	});
 
+	// 第 2 关用侧边停靠格让两人在窄路交换先后，再借新印走向各自出口。
 	Add(LOCTEXT("Chapter02", "借你一格"),
 		LOCTEXT("Hint02", "让进侧袋时也会留下自己的印。先让同伴经过，再回来借他留下的脚印。"), {
 		TEXT("    o"),
 		TEXT("bAoouBa")
 	});
 
+	// 第 3 关加入开关与锁定出口，离开开关后仍需同伴改写回程路线。
 	Add(LOCTEXT("Chapter03", "回来接我"),
 		LOCTEXT("Hint03", "请 B 先开入口。A 到尽头以后，B 还得把整条回程路改写一遍。"), {
 		TEXT("x"),
@@ -58,6 +67,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 		TEXT(" B  b")
 	});
 
+	// 第 4 关通过上下支路分配脚印，先判断同伴需要哪一段路线再决定分流。
 	Add(LOCTEXT("Chapter04", "岔路留给谁"),
 		LOCTEXT("Hint04", "南边的蓝印要留给 B。先看他怎么过河，再选 A 的支路。"), {
 		TEXT("  uoooo"),
@@ -66,6 +76,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 		TEXT("  B b")
 	});
 
+	// 第 5 关使用寿命为两次行动的易碎板，要求安排双方离开和接手的时机。
 	Add(LOCTEXT("Chapter05", "慢半步"),
 		LOCTEXT("Hint05", "先让同伴改好两侧的脚印。离开脆弱石板后，接手只有两次成功移动的时间。"), {
 		TEXT("  a"),
@@ -77,6 +88,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	}, 2);
 
 	{
+		// 第 6 关先让 A 过桥并转送蓝印，再由 B 借印上岸、转回橙印给 A。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter06", "隔岸寄步"),
 			LOCTEXT("Hint06Turn", "A 走过桥后把蓝印转给 B。B 从下岸过桥，再把橙印转回去。"), {
 			TEXT("        b"),
@@ -97,6 +109,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	}
 
 	{
+		// 第 7 关同时满足两处印色条件后寄印，双方的路线需要配合拼接。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter07", "拼一条路"),
 			LOCTEXT("Hint07", "两枚印同时满足，才会在中段拓出路。你还要借同伴的脚印跨过两道缺口。"), {
 			TEXT("        a"),
@@ -114,6 +127,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	}
 
 	{
+		// 第 8 关由 A 录下含转弯的三步，B 借寄来的蓝印回放并送回橙印。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter08", "脚印渡口"),
 			LOCTEXT("Hint08Replay", "先互送入口印。A 在 REC 录下对岸需要的转弯，B 在 PLAY 回放并寄回橙印。"), {
 			TEXT(""),
@@ -136,6 +150,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 		Print(*Level, { 7, 5 }, B, { { { 7, 5 }, { 1, 2 } }, { { 7, 5 }, { 2, 2 } }, { { 7, 5 }, { 3, 2 } }, { { 7, 5 }, { 4, 2 } }, { { 7, 5 }, { 5, 2 } }, { { 7, 5 }, { 6, 2 } }, { { 7, 5 }, { 7, 2 } } });
 	}
 
+	// 第 9 关的一次性印板离开即塌，需要先完成交接再各自前往出口。
 	Add(LOCTEXT("Chapter09", "只能借一次"),
 		LOCTEXT("Hint09", "先改写共用路，再分开去出口。标着 1 的印板，离开就会落下。"), {
 		TEXT("         a"),
@@ -147,6 +162,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	});
 
 	{
+		// 第 10 关反复改写中央印记，A、B 分别触发通向对方一侧的寄印。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter10", "一枚印，两条路"),
 			LOCTEXT("Hint10", "每次改写中间的碑，开放的是另一人的路。留意碑两侧的退路。"), {
 			TEXT("   a"),
@@ -162,6 +178,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	}
 
 	{
+		// 第 11 关先保存一次历史印色，后续改写源印时仍保留原先拓本。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter11", "留一张拓本"),
 			LOCTEXT("Hint11", "先保存蓝印。随后原印会多次改色，别把留给同伴的拓本走掉。"), {
 			TEXT("        b"),
@@ -175,6 +192,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	}
 
 	{
+		// 第 12 关把互寄脚印、双人换位和转桥串联，双方都需借用现场新印。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter12", "最后一步给你"),
 			LOCTEXT("Hint12SwapTurn", "先互寄进桥的脚印，到 SWAP 处一起换位。等 A 离桥，B 再转桥上岸。"), {
 			TEXT("        b"),
@@ -200,6 +218,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	}
 
 	{
+		// 第 13 关为挑战关，用保存的旧印恢复回程，并继续给同伴寄送出口印。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter13", "旧路重现"),
 			LOCTEXT("Hint13", "先封存 B 的橙印。等 A 写完去路，再用旧印恢复回程。A 回去时会替 B 补最后一印。"), {
 			TEXT("   x"),
@@ -219,6 +238,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	}
 
 	{
+		// 第 14 关为挑战关，寄印延迟三次成功行动，需要同时安排等待和让位。
 		UGridLevelDataAsset* Level = Add(LOCTEXT("Chapter14", "迟到的脚印"),
 			LOCTEXT("Hint14", "两轮寄印都有三步延迟。先换岸再折返，留意同伴何时能接下一枚。"), {
 			TEXT("        b"),
@@ -239,6 +259,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateDefaultLevels()
 	return Result;
 }
 
+// 选关页底部的独立试玩，使用较短布局单独介绍转桥、录制和换位。
 TArray<UGridLevelDataAsset*> AGridManager::CreatePrototypeLevels()
 {
 	TArray<UGridLevelDataAsset*> Result;
@@ -257,6 +278,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreatePrototypeLevels()
 	UGridLevelDataAsset* Turn = Add(LOCTEXT("TurnPrototype", "把桥折给你"),
 		LOCTEXT("TurnPrototypeHint", "先走过桥面，再到 TURN 碑按 E 预览。脚印会随桥转过去。"),
 		EGridPrototype::TurnBridge, {TEXT(""), TEXT("    x"), TEXT("  Aoo."), TEXT(" B"), TEXT(""), TEXT("  t"), TEXT("  b")});
+	// 同下标的两个坐标对应同一块石板，两个朝向共享被搬运的脚印状态。
 	Turn->InitialDeck = {{3, 2}, {4, 2}};
 	Turn->AlternateDeck = {{2, 3}, {2, 4}};
 	Turn->TurnControls = {{5, 2}, {2, 5}};
@@ -265,6 +287,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreatePrototypeLevels()
 	UGridLevelDataAsset* Record = Add(LOCTEXT("RecordPrototype", "借你三步"),
 		LOCTEXT("RecordPrototypeHint", "A 在录印碑按 E，走三步后让开。B 到同一块碑按 E 预览回放。"),
 		EGridPrototype::RecordRoute, {TEXT(""), TEXT("   a"), TEXT("   ob"), TEXT(" Aooo"), TEXT(" B")});
+	// 试玩共用 REC/PLAY 位置，正式关卡可以分别把它们放在两座岛上。
 	Record->RecordStart = Record->ReplayStart = {1, 3};
 	Record->ReplayTiles = {{2, 3}, {3, 3}, {3, 2}};
 

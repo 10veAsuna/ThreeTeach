@@ -24,6 +24,8 @@
 
 #define LOCTEXT_NAMESPACE "GridPuzzle"
 
+// 阅读主流程可从文件末尾 StartPlay 开始，再看 Initialize、LoadLevel 与 Move。
+// Rules 保存局面，TileActors 和 Characters 将规则结果呈现到 UE 场景。
 namespace
 {
 	constexpr float TileSize = 100.f;
@@ -46,12 +48,14 @@ namespace
 	}
 }
 
+// C++ 默认类作为兜底，BP_Board 可以把它们替换成带美术配置的派生蓝图。
 AGridManager::AGridManager()
 {
 	TileClass = AGridTile::StaticClass();
 	CharacterClass = AGridPuzzleCharacter::StaticClass();
 }
 
+// 初始化调用链为 GameMode::StartPlay -> Initialize -> ShowMenu -> LoadLevel。
 void AGridManager::Initialize(APlayerController& Controller)
 {
 	Player = &Controller;
@@ -59,6 +63,7 @@ void AGridManager::Initialize(APlayerController& Controller)
 	{
 		Levels.Append(CreateDefaultLevels());
 	}
+	// 第一个挑战关之前均为主线，追加的玩法试玩使用独立的索引区间。
 	const int32 FirstChallenge = Levels.IndexOfByPredicate([](const UGridLevelDataAsset* Level)
 	{
 		return Level && Level->bChallenge;
@@ -66,6 +71,7 @@ void AGridManager::Initialize(APlayerController& Controller)
 	MainLevelCount = FirstChallenge == INDEX_NONE ? Levels.Num() : FirstChallenge;
 	CampaignLevelCount = Levels.Num();
 	Levels.Append(CreatePrototypeLevels());
+	// 存档只恢复进度与收集项，关内位置和撤销历史从关卡初始状态重建。
 	if (UGameplayStatics::DoesSaveGameExist(ProgressSlot, 0))
 	{
 		if (const UGridPuzzleProgress* Saved = Cast<UGridPuzzleProgress>(UGameplayStatics::LoadGameFromSlot(ProgressSlot, 0)))
@@ -85,6 +91,7 @@ void AGridManager::Initialize(APlayerController& Controller)
 	{
 		PaletteMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	}
+	// 灯光与正交摄像机也在运行时创建，停止试玩后这些对象随运行世界一起清理。
 	ADirectionalLight* Light = GetWorld()->SpawnActor<ADirectionalLight>(FVector(0,-700,900), FRotator(-52, -32, 0));
 	Light->GetLightComponent()->SetMobility(EComponentMobility::Movable);
 	Light->GetLightComponent()->SetIntensity(3.2f);
@@ -109,6 +116,7 @@ void AGridManager::Initialize(APlayerController& Controller)
 	ShowMenu();
 }
 
+// 用基础几何体搭建背景底面与悬浮碎石，和可通行网格分开管理。
 void AGridManager::BuildEnvironment()
 {
 	using namespace GridVisuals;
@@ -142,12 +150,14 @@ void AGridManager::BuildEnvironment()
 	}
 }
 
+// 将棋盘居中后映射到世界平面，网格向右对应世界 +Y，网格向下对应世界 -X。
 FVector AGridManager::ToWorld(FIntPoint Coordinate) const
 {
 	return FVector((.5f*(Rules.GetSize().Y-1) - Coordinate.Y) * TileSize,
 		(Coordinate.X - .5f*(Rules.GetSize().X-1)) * TileSize, 0);
 }
 
+// 根据关卡网格尺寸调整正交视野，菜单和结局使用额外的取景偏移。
 void AGridManager::PositionCamera(bool bMenu, bool bOutro)
 {
 	const FVector Offset(-1040.f, -255.f, 1230.f);
@@ -161,6 +171,7 @@ void AGridManager::PositionCamera(bool bMenu, bool bOutro)
 	}
 }
 
+// 先验证新关卡数据，再清理旧场景并生成新地块与双角色。
 bool AGridManager::LoadLevel(int32 Index)
 {
 	if (!Levels.IsValidIndex(Index) || !Levels[Index] || !Rules.Initialize(*Levels[Index]))
@@ -169,6 +180,7 @@ bool AGridManager::LoadLevel(int32 Index)
 		return false;
 	}
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
+	// 切关会结束旧关所有延时回调，避免上一关的动画或提示写入新局面。
 	GetWorldTimerManager().ClearAllTimersForObject(this);
 	for (const auto& Pair : TileActors) { Pair.Value->Destroy(); }
 	for (AGridPuzzleCharacter* Character : Characters) { Character->Destroy(); }
@@ -192,6 +204,7 @@ bool AGridManager::LoadLevel(int32 Index)
 	bMechanicIntroPending = Index < CampaignLevelCount && LevelHasMechanicIntro(Index) &&
 		!SeenMechanicIntros.Contains(Index);
 
+	// 规则给出每个格子的坐标与类型，地块 Setup 负责创建模型和标记。
 	for (const auto& Pair : Rules.GetTiles())
 	{
 		AGridTile* Tile = GetWorld()->SpawnActor<AGridTile>(TileClass, ToWorld(Pair.Key), FRotator::ZeroRotator);
@@ -205,6 +218,7 @@ bool AGridManager::LoadLevel(int32 Index)
 			}
 		}
 	}
+	// 规则中的寄印关系在场景里画成连接线，同一源目标组合只绘制一次。
 	TMap<FIntPoint, TSet<FIntPoint>> LinkedTargets;
 	for (const FGridPrintEffect& Effect : Rules.GetPrintEffects())
 	{
@@ -227,6 +241,7 @@ bool AGridManager::LoadLevel(int32 Index)
 			EchoTile->SetEchoAvailable(true, PaletteMaterial);
 		}
 	}
+	// 按 A、B 顺序生成角色，Characters 的下标与 Rules::RoleIndex 保持一致。
 	for (EPlayerRole Traveler : Roles)
 	{
 		const FIntPoint Position = Rules.GetPosition(Traveler);
@@ -242,6 +257,7 @@ bool AGridManager::LoadLevel(int32 Index)
 	return true;
 }
 
+// 界面切换同时更新暂停状态、鼠标输入模式与 Slate 根控件。
 void AGridManager::SetScreen(EGridScreen NewScreen)
 {
 	Screen = NewScreen == EGridScreen::Playing && bMechanicIntroPending ?
@@ -273,11 +289,13 @@ void AGridManager::SetScreen(EGridScreen NewScreen)
 	{
 		Viewport->RemoveViewportWidgetContent(ViewportUI.ToSharedRef());
 	}
+	// 状态改变时重建界面结构，步数与角色状态等动态文本通过绑定读取最新值。
 	ViewportUI = MakeGridPuzzleScreen(*this);
 	Viewport->AddViewportWidgetContent(ViewportUI.ToSharedRef(), 10);
 	FSlateApplication::Get().SetAllUserFocusToGameViewport();
 }
 
+// Slate 控件由视口持有，结束试玩时主动移除并释放管理器的共享引用。
 void AGridManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (UGameViewportClient* Viewport = GetWorld()->GetGameViewport(); Viewport && ViewportUI)
@@ -288,17 +306,20 @@ void AGridManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
+// 从已解锁的续玩关卡开始，首次进入新机关关时由 SetScreen 展示引导。
 void AGridManager::Start()
 {
 	if (LoadLevel(GetResumeIndex())) { SetScreen(EGridScreen::Playing); }
 }
 
+// 记录说明页的来源，关闭时才能回到原先的暂停页或主菜单。
 void AGridManager::ShowControls()
 {
 	bControlsFromPause = Screen == EGridScreen::Paused;
 	SetScreen(EGridScreen::Controls);
 }
 
+// 主菜单背后也显示一套棋盘，因此进入菜单时会加载第一关作为背景。
 void AGridManager::ShowMenu()
 {
 	bControlsFromPause = false;
@@ -311,6 +332,7 @@ void AGridManager::ShowSelection()
 	SetScreen(EGridScreen::Selection);
 }
 
+// 引导已读状态立即持久化，之后重进该关可以直接开始游玩。
 void AGridManager::DismissMechanicIntro()
 {
 	if (Screen != EGridScreen::MechanicIntro) { return; }
@@ -320,6 +342,7 @@ void AGridManager::DismissMechanicIntro()
 	SetScreen(EGridScreen::Playing);
 }
 
+// 主线逐关解锁，挑战要求完成主线，玩法试玩可直接进入。
 bool AGridManager::CanSelectLevel(int32 Index) const
 {
 	return Levels.IsValidIndex(Index) && (Index >= CampaignLevelCount ||
@@ -334,6 +357,7 @@ void AGridManager::SelectLevel(int32 Index)
 	}
 }
 
+// 主线结算前往下一关，终章进入演出，挑战与试玩返回选关。
 void AGridManager::Advance()
 {
 	if (Screen != EGridScreen::Complete) { return; }
@@ -351,6 +375,7 @@ void AGridManager::Advance()
 	if (LoadLevel(LevelIndex+1)) { SetScreen(EGridScreen::Playing); }
 }
 
+// 主线通关只提升完成进度，重复游玩旧关不会回退解锁状态。
 void AGridManager::SaveLevelProgress()
 {
 	bool bChanged = false;
@@ -362,6 +387,7 @@ void AGridManager::SaveLevelProgress()
 	if (bChanged) { PersistProgress(); }
 }
 
+// 将进度、回响收集和已读引导写入固定的 SaveGame 槽位。
 void AGridManager::PersistProgress()
 {
 	UGridPuzzleProgress* Save = CastChecked<UGridPuzzleProgress>(
@@ -375,6 +401,7 @@ void AGridManager::PersistProgress()
 	}
 }
 
+// 回响以关卡索引去重，拾取时更新显示并立即保存。
 bool AGridManager::TryCollectEchoAt(FIntPoint Position)
 {
 	FIntPoint EchoPosition;
@@ -394,6 +421,7 @@ bool AGridManager::TryCollectEchoAt(FIntPoint Position)
 	return true;
 }
 
+// 回放播放中屏蔽暂停切换，机关预览中按返回则先取消预览。
 void AGridManager::TogglePause()
 {
 	if (!ReplaySteps.IsEmpty()) { return; }
@@ -419,6 +447,7 @@ void AGridManager::Exit()
 	UKismetSystemLibrary::QuitGame(this, Player, EQuitPreference::Quit, false);
 }
 
+// 重置复用切关流程，重新从同一个关卡资源构造初始局面。
 void AGridManager::ResetLevel()
 {
 	if (bApplyingMove || !ReplaySteps.IsEmpty() || (Screen != EGridScreen::Playing && Screen != EGridScreen::Paused)) { return; }
@@ -429,6 +458,8 @@ void AGridManager::ResetLevel()
 	}
 }
 
+// 撤销恢复完整规则快照，再让地块和两个人物追随恢复后的逻辑状态。
+// 已收集回响属于持久进度，和关内行动快照分开保存。
 void AGridManager::UndoMove()
 {
 	if (bApplyingMove || !ReplaySteps.IsEmpty() || (Screen != EGridScreen::Playing && Screen != EGridScreen::Paused &&
@@ -441,6 +472,7 @@ void AGridManager::UndoMove()
 	}
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
 	GetWorldTimerManager().ClearTimer(ScreenTimer);
+	// 转桥方向与人物位置的差异决定此次恢复使用转桥、换位还是普通行走动画。
 	FUndoStep Step = UndoHistory.Pop(EAllowShrinking::No);
 	const bool bTurned = Step.PreviousRules.GetNextDeck() != Rules.GetNextDeck();
 	Rules = MoveTemp(Step.PreviousRules);
@@ -469,6 +501,7 @@ void AGridManager::UndoMove()
 	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
 }
 
+// 统一刷新人物的当前控制标记与抵达状态。
 void AGridManager::UpdateControl()
 {
 	for (int32 Index = 0; Index < Characters.Num(); ++Index)
@@ -477,6 +510,7 @@ void AGridManager::UpdateControl()
 	}
 }
 
+// 桥面读数逐项展示条件满足情况，逻辑判定仍由 Rules 负责。
 void AGridManager::UpdateBridgeDisplays()
 {
 	for (const auto& Pair : TileActors)
@@ -497,6 +531,7 @@ void AGridManager::UpdateBridgeDisplays()
 	}
 }
 
+// 将未满足的桥条件转换成提示，明确缺少谁的站位或脚印。
 FText AGridManager::GetClosedBridgeFeedback(FIntPoint Position) const
 {
 	const FTileData& Bridge = Rules.GetTiles().FindChecked(Position);
@@ -515,6 +550,7 @@ FText AGridManager::GetClosedBridgeFeedback(FIntPoint Position) const
 		FText::FromString(Bridge.Marker), FText::Join(LOCTEXT("BridgeConditionSeparator", "　·　"), Missing));
 }
 
+// 切换控制角色不结算步数，已录下的移动方向也继续保留。
 void AGridManager::SwitchCharacter()
 {
 	if (Screen != EGridScreen::Playing || bApplyingMove || !ReplaySteps.IsEmpty()) { return; }
@@ -528,6 +564,7 @@ void AGridManager::SwitchCharacter()
 	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
 }
 
+// 临时反馈使用同一个定时器，新消息会替换旧消息的清除时间。
 void AGridManager::SetFeedback(FText Message)
 {
 	Feedback = MoveTemp(Message);
@@ -556,6 +593,7 @@ int32 AGridManager::GetEchoTargetCount() const
 	return 6;
 }
 
+// 回响位置按从 0 开始的关卡索引配置，自动化测试会搜索其可达性。
 bool AGridManager::GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosition)
 {
 	switch (LevelIndex)
@@ -570,6 +608,7 @@ bool AGridManager::GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosit
 	}
 }
 
+// 只在首次引入机关的指定关卡显示说明，复用已有规则的关卡直接开始。
 bool AGridManager::LevelHasMechanicIntro(int32 LevelIndex)
 {
 	switch (LevelIndex)
@@ -624,6 +663,7 @@ FText AGridManager::GetMechanicIntroTitle() const
 	}
 }
 
+// 引导文案与运行中的规则对应，显示由 SetScreen 和已读存档共同控制。
 FText AGridManager::GetMechanicIntroBody() const
 {
 	switch (LevelIndex)
@@ -685,6 +725,7 @@ FText AGridManager::GetMechanicIntroExample() const
 	}
 }
 
+// 将录制方向转换成界面的箭头序列，显示已经录入的步数。
 FText AGridManager::GetRecordingStatus() const
 {
 	if (Levels[LevelIndex]->Prototype != EGridPrototype::RecordRoute) { return FText::GetEmpty(); }
@@ -701,6 +742,7 @@ FText AGridManager::GetRecordingStatus() const
 		FText::AsNumber(Directions.Num()), FText::FromString(Sequence));
 }
 
+// 清除只用于预览的编号和颜色标记，实际地块状态从 Rules 恢复。
 void AGridManager::ClearActionPreview()
 {
 	for (FIntPoint Position : PreviewMarkers)
@@ -720,6 +762,7 @@ void AGridManager::MarkActionTile(FIntPoint Position, FText Label, FColor Color)
 	}
 }
 
+// 规则已完成换槽，这里让新槽位的模型从旧位置沿轴心转入。
 void AGridManager::AnimateTurnedDeck(const TArray<FIntPoint>& ChangedTiles, bool bReverse)
 {
 	const FVector Pivot = ToWorld(Levels[LevelIndex]->TurnPivot);
@@ -731,6 +774,8 @@ void AGridManager::AnimateTurnedDeck(const TArray<FIntPoint>& ChangedTiles, bool
 	}
 }
 
+// E 键机关入口，先在 Trial 副本上试算，首次展示预览，再次确认才应用结果。
+// 开始录制立即生效，转桥、换位和回放使用预览确认流程。
 void AGridManager::UseAction()
 {
 	if (Screen != EGridScreen::Playing || !HasLevelAction() || bApplyingMove || !ReplaySteps.IsEmpty() ||
@@ -738,6 +783,7 @@ void AGridManager::UseAction()
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
 	FGridPuzzleRules Trial = Rules;
 	EGridPrototype Interaction = Levels[LevelIndex]->Prototype;
+	// 组合机关优先执行已满足的换位，尚不能换位时允许在 TURN 控制格转桥。
 	if (Interaction == EGridPrototype::TurnBridgeAndSwap)
 	{
 		Interaction = Rules.IsAtTurnControl(ActiveRole) && !Rules.CanSwap() ?
@@ -827,6 +873,7 @@ void AGridManager::UseAction()
 		{
 			for (FIntPoint Position : Step.ChangedTiles) { Changed.AddUnique(Position); }
 		}
+		// 整段三步回放共用一个撤销快照，播放期间锁住其他移动输入。
 		UndoHistory.Add({Rules, ActiveRole, MoveTemp(Changed)});
 		ReplayIndex = 0;
 		ReplaySteps = MoveTemp(Steps);
@@ -875,6 +922,7 @@ void AGridManager::UseAction()
 	}
 }
 
+// 逐个应用预演得到的快照，用定时器把规则结果呈现成可观察的三步动作。
 void AGridManager::PlayReplayStep()
 {
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
@@ -890,6 +938,7 @@ void AGridManager::PlayReplayStep()
 	GetWorldTimerManager().SetTimer(ReplayTimer, this, &AGridManager::PlayReplayStep, StepTime, false);
 }
 
+// 正常输入入口，先调用规则判定，成功后呈现并保存撤销快照。
 void AGridManager::Move(FIntPoint Direction)
 {
 	if (Screen != EGridScreen::Playing || bApplyingMove || !ReplaySteps.IsEmpty() ||
@@ -899,6 +948,7 @@ void AGridManager::Move(FIntPoint Direction)
 
 	const EPlayerRole Mover = ActiveRole;
 	AGridPuzzleCharacter* Character = Characters[FGridPuzzleRules::RoleIndex(Mover)];
+	// 复制完整行动前状态，包含脚印、倒计时、寄印队列和录制方向。
 	FGridPuzzleRules PreviousRules = Rules;
 	FGridMove MoveResult = Rules.TryMove(Mover, Direction);
 	if (MoveResult.Result != EGridMoveResult::Moved)
@@ -931,6 +981,7 @@ void AGridManager::Move(FIntPoint Direction)
 	CheckCompletion();
 }
 
+// 将已经结算的规则结果转换成走路动画、地块刷新、事件通知与音效。
 void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 {
 	UnlockInputAt = GetWorld()->GetTimeSeconds() + StepTime;
@@ -971,6 +1022,7 @@ void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 	}
 }
 
+// 只刷新行动涉及的格子，并收集坍塌与桥变化，供调用者播放反馈。
 void AGridManager::ApplyTileUpdates(const TArray<FIntPoint>& Positions, bool bPulse, bool& bCollapsed, bool& bBridgeChanged)
 {
 	for (const FIntPoint Position : Positions)
@@ -995,6 +1047,7 @@ void AGridManager::ApplyTileUpdates(const TArray<FIntPoint>& Positions, bool bPu
 	}
 }
 
+// 两人到达后保存解锁进度，再安排结算界面的切换。
 void AGridManager::CheckCompletion()
 {
 	if (Rules.IsComplete())
@@ -1010,6 +1063,7 @@ void AGridManager::CheckCompletion()
 	}
 }
 
+// 终章通过后运行一次结局演出，复用已生成的人物、棋盘与摄像机。
 void AGridManager::BeginOutro()
 {
 	using namespace GridVisuals;
@@ -1052,6 +1106,7 @@ void AGridManager::BeginOutro()
 	GetWorldTimerManager().SetTimer(OutroTimer, this, &AGridManager::FinishOutro, 3.05f, false);
 }
 
+// 定时推进结局中沿棋盘传播的脚印发光。
 void AGridManager::PulseOutro()
 {
 	const float Time = GetWorld()->GetTimeSeconds() - OutroStartedAt;
@@ -1062,12 +1117,14 @@ void AGridManager::PulseOutro()
 	}
 }
 
+// 演出结束后开放结局界面的选关与返回按钮。
 void AGridManager::FinishOutro()
 {
 	bEndingReady = true;
 	SetScreen(EGridScreen::Ending);
 }
 
+// 双角色由管理器统一控制，默认 Pawn 留空，输入交给自定义 PlayerController。
 AGridPuzzleGameMode::AGridPuzzleGameMode()
 {
 	DefaultPawnClass = nullptr;
@@ -1075,6 +1132,7 @@ AGridPuzzleGameMode::AGridPuzzleGameMode()
 	ManagerClass = AGridManager::StaticClass();
 }
 
+// 点击运行后的场景生成入口，生成配置好的管理器蓝图并初始化。
 void AGridPuzzleGameMode::StartPlay()
 {
 	Super::StartPlay();
@@ -1096,6 +1154,7 @@ void AGridPuzzleGameMode::StartPlay()
 	}
 }
 
+// 动作名来自 DefaultInput.ini，暂停期间仍允许撤销、重置、返回和确认。
 void AGridPuzzlePlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
@@ -1111,6 +1170,7 @@ void AGridPuzzlePlayerController::SetupInputComponent()
 	InputComponent->BindAction("GridConfirm", IE_Pressed, this, &AGridPuzzlePlayerController::Confirm).bExecuteWhenPaused = true;
 }
 
+// 输入方向使用网格坐标，向上使 Y 减一，世界位置由管理器统一换算。
 void AGridPuzzlePlayerController::MoveUp() { if (Manager) { Manager->Move({0,-1}); } }
 void AGridPuzzlePlayerController::MoveDown() { if (Manager) { Manager->Move({0,1}); } }
 void AGridPuzzlePlayerController::MoveLeft() { if (Manager) { Manager->Move({-1,0}); } }
@@ -1121,6 +1181,7 @@ void AGridPuzzlePlayerController::Undo() { if (Manager) { Manager->UndoMove(); }
 void AGridPuzzlePlayerController::Reset() { if (Manager) { Manager->ResetLevel(); } }
 void AGridPuzzlePlayerController::PauseOrBack() { if (Manager) { Manager->TogglePause(); } }
 
+// 同一个确认动作随当前界面分派为开始、关闭引导、继续或下一关。
 void AGridPuzzlePlayerController::Confirm()
 {
 	if (!Manager) { return; }

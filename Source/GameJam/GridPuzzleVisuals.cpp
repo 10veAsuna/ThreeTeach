@@ -14,6 +14,7 @@ namespace
 	const FLinearColor BridgeLight(.29f, .84f, .76f);
 	const FLinearColor BridgeDim(.21f, .33f, .37f);
 
+	// 世界空间中的机关文字挂到所属 Actor，并注册组件后加入场景显示。
 	UTextRenderComponent* GridLabel(AActor& Owner, USceneComponent* Parent, const FString& Text,
 		FVector Position, float Size)
 	{
@@ -30,11 +31,13 @@ namespace
 	}
 }
 
+// A 使用蓝色，B 使用橙色，人物、脚印和界面保持相同的识别关系。
 FLinearColor GridVisuals::RoleColor(EPlayerRole Role)
 {
 	return Role == EPlayerRole::PlayerA ? FLinearColor(.14f, .66f, 1.f) : FLinearColor(1.f, .36f, .105f);
 }
 
+// 运行时从 UE 基础模型创建网格组件，并为每个组件生成可独立调色的材质实例。
 UStaticMeshComponent* GridVisuals::Shape(AActor& Actor, USceneComponent* Parent, UMaterialInterface* Material,
 	EGridShape Type, FVector Position, FVector Scale, FLinearColor Color, float Glow, FRotator Rotation)
 {
@@ -45,6 +48,7 @@ UStaticMeshComponent* GridVisuals::Shape(AActor& Actor, USceneComponent* Parent,
 	UStaticMeshComponent* Mesh = NewObject<UStaticMeshComponent>(&Actor);
 	Mesh->SetupAttachment(Parent);
 	Mesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, Paths[static_cast<int32>(Type)]));
+	// 移动合法性由网格规则决定，显示模型关闭物理碰撞和导航影响。
 	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Mesh->SetCanEverAffectNavigation(false);
 	Mesh->SetRelativeTransform(FTransform(Rotation, Position, Scale));
@@ -55,6 +59,7 @@ UStaticMeshComponent* GridVisuals::Shape(AActor& Actor, USceneComponent* Parent,
 	return Mesh;
 }
 
+// 调整动态材质的颜色与自发光，兼容项目材质和基础材质使用的颜色参数名。
 void GridVisuals::Paint(UStaticMeshComponent* Mesh, FLinearColor Color, float Glow)
 {
 	if (UMaterialInstanceDynamic* Dynamic = Cast<UMaterialInstanceDynamic>(Mesh->GetMaterial(0)))
@@ -65,6 +70,7 @@ void GridVisuals::Paint(UStaticMeshComponent* Mesh, FLinearColor Color, float Gl
 	}
 }
 
+// 构造阶段只建立根层级，具体外观等管理器提供地块类型后再创建。
 AGridTile::AGridTile()
 {
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("Root")));
@@ -74,6 +80,7 @@ AGridTile::AGridTile()
 	PrimaryActorTick.bStartWithTickEnabled = false;
 }
 
+// 按地块类型拼装石板、桥、出口或开关，再创建脚印和提示组件。
 void AGridTile::Setup(const FTileData& Data, UMaterialInterface* Material)
 {
 	using namespace GridVisuals;
@@ -178,6 +185,7 @@ void AGridTile::Setup(const FTileData& Data, UMaterialInterface* Material)
 	Update(Data, false);
 }
 
+// 摄像机取景变化后同步标识朝向，使机关文字仍朝向观察者。
 void AGridTile::FaceMarker(const FRotator& Rotation)
 {
 	MarkerRotation = Rotation;
@@ -186,6 +194,7 @@ void AGridTile::FaceMarker(const FRotator& Rotation)
 	if (ActionMarker) { ActionMarker->SetWorldRotation(Rotation); }
 }
 
+// 机关预览的落点标记独立于实际脚印，取消预览时可以单独隐藏。
 void AGridTile::ShowActionMarker(const FText& Label, FColor Color)
 {
 	if (!ActionMarker && !Label.IsEmpty())
@@ -202,6 +211,7 @@ void AGridTile::ShowActionMarker(const FText& Label, FColor Color)
 	if (MarkerText) { MarkerText->SetVisibility(Label.IsEmpty() && !TileData.bFoldedAway); }
 }
 
+// 新朝向的 Actor 已在终点，Pieces 从旧桥面位置绕轴转入，逻辑状态保持在终点。
 void AGridTile::AnimateDeckFrom(FVector Center, FVector Start, float Duration)
 {
 	DeckPivot = Center - GetActorLocation();
@@ -215,6 +225,7 @@ void AGridTile::AnimateDeckFrom(FVector Center, FVector Start, float Duration)
 	SetActorTickEnabled(true);
 }
 
+// 绘制桥与条件源之间的空间连接，帮助玩家找到对应压板或印板。
 void AGridTile::AddBridgeLink(const FVector& SourceOffset, UMaterialInterface* Material)
 {
 	BridgeLinks.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
@@ -222,6 +233,7 @@ void AGridTile::AddBridgeLink(const FVector& SourceOffset, UMaterialInterface* M
 		BridgeDim * .55f, .14f, SourceOffset.Rotation()));
 }
 
+// 寄印发送端与接收端之间的连线，方向和长度由管理器提供的相对坐标决定。
 void AGridTile::AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Material)
 {
 	GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
@@ -229,6 +241,7 @@ void AGridTile::AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Ma
 		FLinearColor(.14f,.41f,.51f), .42f, TargetOffset.Rotation());
 }
 
+// 更新条件读数与连线高亮，显示桥当前还缺哪些角色或印记。
 void AGridTile::UpdateBridgeStatus(const TArray<FString>& Labels, const TArray<bool>& Matches)
 {
 	if (!BridgeReadout) { return; }
@@ -240,6 +253,7 @@ void AGridTile::UpdateBridgeStatus(const TArray<FString>& Labels, const TArray<b
 	}
 }
 
+// 回响外观按需创建，拾取后隐藏并停止对应的悬浮闪光。
 void AGridTile::SetEchoAvailable(bool bAvailable, UMaterialInterface* Material)
 {
 	bEchoAvailable = bAvailable;
@@ -257,6 +271,7 @@ void AGridTile::SetEchoAvailable(bool bAvailable, UMaterialInterface* Material)
 	if (bAvailable) { SetActorTickEnabled(true); }
 }
 
+// 两色脚印都预先拼好，由 Update 选择当前需要显示的一组。
 void AGridTile::MakeFootprints(UMaterialInterface* Material)
 {
 	using namespace GridVisuals;
@@ -278,6 +293,7 @@ void AGridTile::MakeFootprints(UMaterialInterface* Material)
 	}
 }
 
+// 规则状态的显示入口，统一刷新脚印、倒计时、WAIT 标记、出口与坍塌效果。
 void AGridTile::Update(const FTileData& Data, bool bPulse)
 {
 	using namespace GridVisuals;
@@ -384,6 +400,7 @@ void AGridTile::Update(const FTileData& Data, bool bPulse)
 	OnTileUpdated(Data, bPulse);
 }
 
+// 结局沿保留下来的脚印提高边框亮度，Strength 由管理器的演出计时决定。
 void AGridTile::AnimateOutro(float Strength)
 {
 	if (TileData.HasFootprints() && !TileData.bIsCollapsed && TileData.FootprintOwner != EFootprintOwner::None)
@@ -394,6 +411,7 @@ void AGridTile::AnimateOutro(float Strength)
 	}
 }
 
+// Tick 只推进视觉过渡，地块状态与脚印可通行性由规则层维护。
 void AGridTile::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -406,6 +424,7 @@ void AGridTile::Tick(float DeltaSeconds)
 			DeckPivot + DeckStart.RotateAngleAxis(Angle, FVector::UpVector) : FVector::ZeroVector);
 		if (Alpha >= 1.f) { DeckDuration = 0.f; }
 	}
+	// 有人站在桥上时保留脚下的可见桥面，直到离开后再完成收拢。
 	if (TileData.TileType == ETileType::Bridge)
 	{
 		const float Target = TileData.bIsActivated || TileData.bIsOccupied ? 1.f : 0.f;
@@ -460,10 +479,12 @@ void AGridTile::Tick(float DeltaSeconds)
 		GridVisuals::Paint(EchoMarker, FLinearColor(.95f,.80f,.42f), 2.f + Pulse * 2.f);
 		GridVisuals::Paint(EchoHalo, FLinearColor(.95f,.80f,.42f), .7f + Pulse);
 	}
+	// 转动、闪烁、寄印等待和回响动画结束后关闭 Tick，减少静止格子的逐帧开销。
 	SetActorTickEnabled(DeckDuration > 0.f || bLastStep || TileData.bPrintPending ||
 		(Ripple && Ripple->IsVisible()) || bEchoAvailable);
 }
 
+// 人物构造时只有层级，头、身体和围巾由 Setup 在运行时拼装。
 AGridPuzzleCharacter::AGridPuzzleCharacter()
 {
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("Root")));
@@ -473,6 +494,7 @@ AGridPuzzleCharacter::AGridPuzzleCharacter()
 	PrimaryActorTick.bStartWithTickEnabled = false;
 }
 
+// 使用圆锥、球体和圆柱组合人物，颜色由角色身份与蓝图围巾配置决定。
 void AGridPuzzleCharacter::Setup(EPlayerRole NewRole, FIntPoint Start, UMaterialInterface* Material)
 {
 	using namespace GridVisuals;
@@ -519,6 +541,7 @@ void AGridPuzzleCharacter::Setup(EPlayerRole NewRole, FIntPoint Start, UMaterial
 	ControlDiamond->SetVisibility(false);
 }
 
+// 立即更新逻辑格坐标，并记录视觉起终点，由后续 Tick 平滑走完这一步。
 void AGridPuzzleCharacter::MoveTo(FIntPoint Destination, FVector WorldDestination, float MoveDuration, bool bCurve)
 {
 	GridPosition = Destination;
@@ -533,6 +556,7 @@ void AGridPuzzleCharacter::MoveTo(FIntPoint Destination, FVector WorldDestinatio
 	OnCharacterMoved(Destination);
 }
 
+// 被规则拒绝的输入只产生短促探身反馈，人物最终回到原世界位置。
 void AGridPuzzleCharacter::RejectMove(FVector WorldDirection)
 {
 	From = To = GetActorLocation();
@@ -543,6 +567,7 @@ void AGridPuzzleCharacter::RejectMove(FVector WorldDirection)
 	SetActorTickEnabled(true);
 }
 
+// 头顶信标标出当前控制角色，抵达终点后的状态由管理器传入。
 void AGridPuzzleCharacter::SetControlState(bool bControlled, bool bFinished)
 {
 	bIsControlled = bControlled && !bFinished;
@@ -557,6 +582,7 @@ void AGridPuzzleCharacter::SetControlState(bool bControlled, bool bFinished)
 	OnControlChanged(bControlled, bFinished);
 }
 
+// 按经过时间插值位置，叠加起伏、换位弧线和控制信标的动态效果。
 void AGridPuzzleCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);

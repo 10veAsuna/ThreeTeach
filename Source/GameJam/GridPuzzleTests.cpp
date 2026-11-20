@@ -1,5 +1,7 @@
 #include "GridPuzzleGame.h"
 
+// 开发构建中的规则测试，控制台使用 Automation RunTests OneStep 执行已注册用例。
+// 测试直接推进规则状态，人物渲染、动画和输入衔接由实际试玩检查。
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Containers/Queue.h"
@@ -13,8 +15,10 @@ namespace
 	const FIntPoint Up(0, -1), Down(0, 1), Left(-1, 0), Right(1, 0);
 }
 
+// 复制局面并搜索合法后继，用于验证机关必要性、借用新印的必要性与收集物可达性。
 struct FGridTestSearch
 {
+	// 把角色、脚印、地块、寄印和录制状态编码为去重键，避免重复展开相同局面。
 	static FString StateKey(const FGridPuzzleRules& Rules)
 	{
 		FString Key;
@@ -49,6 +53,8 @@ struct FGridTestSearch
 		return Key;
 	}
 
+	// BannedAction 禁用指定机关，BannedRoles 使用 A=1、B=2 的位掩码限制借用新印。
+	// 如果这些限制下仍能通关，说明当前关卡存在绕过设计核心的路线。
 	static bool CanClear(const UGridLevelDataAsset& Level, EGridPrototype BannedAction = EGridPrototype::None,
 		int32 BannedRoles = 0)
 	{
@@ -105,6 +111,7 @@ struct FGridTestSearch
 		return false;
 	}
 
+	// 允许普通移动与机关操作，搜索任意角色能否实际到达指定收集坐标。
 	static bool CanVisit(const UGridLevelDataAsset& Level, FIntPoint Target)
 	{
 		TSet<FString> Seen;
@@ -149,6 +156,8 @@ struct FGridTestSearch
 	}
 };
 
+// 宏把测试类注册为控制台可查找的名字，RunTest 是对应的执行函数。
+// 本用例检查独立试玩的转桥带印、回放失败回滚与双人换位状态。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridPrototypeTest, "OneStep.Rules.Prototypes",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -231,6 +240,7 @@ bool FGridPrototypeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 逐关执行参考解，并检查机关与双方新脚印在对应关卡中的必要性。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridChaptersTest, "OneStep.Rules.AllChapters",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -249,6 +259,8 @@ bool FGridChaptersTest::RunTest(const FString& Parameters)
 			if (!TestNotNull(Name, Levels[Index])) { return false; }
 		}
 	}
+	// 每个词先写角色 A/B，再写方向 U/D/L/R；E 表示该角色触发关卡机关。
+	// 数组顺序与关卡数组一致，机关试算执行完整规则，避免跳过其中的脚印判定。
 	const TCHAR* Solutions[] = {
 		TEXT("AR AR AU AU BL BL BD BD"),
 		TEXT("AR AR BL BR AR AU BL BL AD AR AR BL BL BL"),
@@ -283,6 +295,7 @@ bool FGridChaptersTest::RunTest(const FString& Parameters)
 		{
 			continue;
 		}
+		// 机关关额外搜索禁用机关后的局面，确认玩家必须使用该关的新玩法。
 		const EGridPrototype Action = Levels[Index]->Prototype;
 		if (Action != EGridPrototype::None)
 		{
@@ -346,12 +359,14 @@ bool FGridChaptersTest::RunTest(const FString& Parameters)
 			}
 		}
 		TestTrue(Chapter + TEXT(" completes"), Rules.IsComplete());
+		// 统计参考解中实际借到脚印的行动比例，约束路线对主题规则的依赖。
 		TestTrue(Chapter + TEXT(" borrows a print on at least 60 percent of its reference steps"),
 			BorrowedPrintMoves * 5 >= Rules.GetMoveCount() * 3);
 	}
 	return true;
 }
 
+// 覆盖易碎板占用、离开、非法输入和归零坍塌的边界时机。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridFragileTest, "OneStep.Rules.FragileBoundary",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -396,6 +411,7 @@ bool FGridFragileTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 检查桥对站位与印色条件的响应，以及关闭时留在桥上的角色能否离开。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridBridgesTest, "OneStep.Rules.BridgeConditions",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -447,11 +463,14 @@ bool FGridBridgesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 检查普通关卡必须借用玩家现场留下的新印，并需要达到预设的角色交接次数。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridFreshPrintTest, "OneStep.Rules.RequiresFreshFootprints",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FGridFreshPrintTest::RunTest(const FString& Parameters)
 {
+	// 记录到达局面的最少角色切换次数，过滤成本更高的重复分支。
+	// 发现通关或超过搜索上限时返回失败，避免把未搜索完误认为不可达。
 	const auto ProveUnreachable = [](const UGridLevelDataAsset& Level, int32 BannedRoles,
 		int32 RoleChangeLimit = MAX_int32)
 	{
@@ -529,6 +548,7 @@ bool FGridFreshPrintTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 检查延迟寄印的送达时机、目标占用等待，以及一次性印板的消耗时机。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridPrintTimingTest, "OneStep.Rules.PrintDelivery",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -566,6 +586,7 @@ bool FGridPrintTimingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// 搜索六个回响的可达性，同时核对首次机关引导出现在哪些关卡。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridEchoPickupTest, "OneStep.Rules.EchoPickups",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
