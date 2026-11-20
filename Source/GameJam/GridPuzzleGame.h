@@ -14,7 +14,7 @@ class AGridPuzzleCharacter;
 class UMaterialInterface;
 class SWidget;
 
-enum class EGridScreen : uint8 { Menu, Selection, Controls, Playing, Paused, Transition, Complete, Ending };
+enum class EGridScreen : uint8 { Menu, Selection, Controls, MechanicIntro, Playing, Paused, Transition, Complete, Ending };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FGridTileEvent, FTileData, Tile);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGridCharacterEvent, EPlayerRole, Role, FIntPoint, Position);
@@ -27,6 +27,8 @@ class GAMEJAM_API UGridPuzzleProgress : public USaveGame
 
 public:
 	UPROPERTY() int32 CompletedMainLevels = 0;
+	UPROPERTY() TArray<int32> EarnedEchoes;
+	UPROPERTY() TArray<int32> SeenMechanicIntros;
 };
 
 UCLASS(Blueprintable)
@@ -41,6 +43,7 @@ public:
 	void ShowControls();
 	void ShowMenu();
 	void ShowSelection();
+	void DismissMechanicIntro();
 	void SelectLevel(int32 Index);
 	void Advance();
 	void TogglePause();
@@ -91,6 +94,15 @@ public:
 	FText GetFeedback() const { return Feedback; }
 	FText GetRecordingStatus() const;
 	bool GetEndingReady() const { return bEndingReady; }
+	bool HasCurrentLevelEcho() const { return EarnedEchoes.Contains(LevelIndex); }
+	int32 GetEarnedEchoCount() const { return EarnedEchoes.Num(); }
+	int32 GetEchoTargetCount() const;
+	static bool GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosition);
+	static bool LevelHasMechanicIntro(int32 LevelIndex);
+	FText GetLevelEchoName(int32 Index) const;
+	FText GetMechanicIntroTitle() const;
+	FText GetMechanicIntroBody() const;
+	FText GetMechanicIntroExample() const;
 
 private:
 	struct FUndoStep
@@ -114,6 +126,8 @@ private:
 	void AnimateTurnedDeck(const TArray<FIntPoint>& ChangedTiles, bool bReverse);
 	FText GetClosedBridgeFeedback(FIntPoint Position) const;
 	void SaveLevelProgress();
+	void PersistProgress();
+	bool TryCollectEchoAt(FIntPoint Position);
 	void BuildEnvironment();
 	void PositionCamera(bool bMenu, bool bOutro = false);
 	FVector ToWorld(FIntPoint Coordinate) const;
@@ -143,6 +157,8 @@ private:
 	int32 CampaignLevelCount = 0;
 	int32 ReplayIndex = 0;
 	int32 CompletedMainLevels = 0;
+	TSet<int32> EarnedEchoes;
+	TSet<int32> SeenMechanicIntros;
 	float UnlockInputAt = 0.f;
 	float OutroStartedAt = 0.f;
 	FTimerHandle ScreenTimer;
@@ -154,6 +170,7 @@ private:
 	bool bApplyingMove = false;
 	bool bControlsFromPause = false;
 	bool bActionPreview = false;
+	bool bMechanicIntroPending = false;
 };
 
 UCLASS()

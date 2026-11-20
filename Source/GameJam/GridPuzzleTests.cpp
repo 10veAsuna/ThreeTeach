@@ -104,6 +104,49 @@ struct FGridTestSearch
 		}
 		return false;
 	}
+
+	static bool CanVisit(const UGridLevelDataAsset& Level, FIntPoint Target)
+	{
+		TSet<FString> Seen;
+		TArray<FGridPuzzleRules> Queue;
+		const auto Enqueue = [&Seen, &Queue](FGridPuzzleRules&& Rules)
+		{
+			FString Key = StateKey(Rules);
+			if (!Seen.Contains(Key))
+			{
+				Seen.Add(MoveTemp(Key));
+				Queue.Add(MoveTemp(Rules));
+			}
+		};
+		FGridPuzzleRules Initial;
+		if (!Initial.Initialize(Level)) { return false; }
+		Enqueue(MoveTemp(Initial));
+		for (int32 Index = 0; Index < Queue.Num(); ++Index)
+		{
+			const FGridPuzzleRules Current = MoveTemp(Queue[Index]);
+			if (Current.GetPosition(Blue) == Target || Current.GetPosition(Orange) == Target) { return true; }
+			for (const EPlayerRole Role : { Blue, Orange })
+			{
+				for (const FIntPoint Direction : { Up, Down, Left, Right })
+				{
+					FGridPuzzleRules Next = Current;
+					if (Next.TryMove(Role, Direction).Result == EGridMoveResult::Moved) { Enqueue(MoveTemp(Next)); }
+				}
+				FGridPuzzleRules Next = Current;
+				TArray<FIntPoint> Changed;
+				FGridMove SwapMove;
+				if (Next.TryTurnBridge(Role, Changed) || Next.StartRecording(Role) ||
+					Next.TrySwap(Role, SwapMove))
+				{
+					Enqueue(MoveTemp(Next));
+				}
+				TArray<FGridMove> Steps;
+				TArray<FGridPuzzleRules> States;
+				if (Current.PlanReplay(Role, Steps, States)) { Enqueue(MoveTemp(States.Last())); }
+			}
+		}
+		return false;
+	}
 };
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridPrototypeTest, "OneStep.Rules.Prototypes",
@@ -520,6 +563,36 @@ bool FGridPrintTimingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("One-use print collapses on departure"), Rules.GetTiles().FindChecked(SingleUse).bIsCollapsed);
 	Rules.TryMove(B, {1,0});
 	TestTrue(TEXT("B cannot enter the collapsed blue print"), Rules.TryMove(B, {0,-1}).Result == EGridMoveResult::Collapsed);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridEchoPickupTest, "OneStep.Rules.EchoPickups",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGridEchoPickupTest::RunTest(const FString& Parameters)
+{
+	const TArray<UGridLevelDataAsset*> Levels = AGridManager::CreateDefaultLevels();
+	int32 PickupCount = 0;
+	for (int32 Index = 0; Index < Levels.Num(); ++Index)
+	{
+		FIntPoint Pickup;
+		if (!AGridManager::GetEchoLocationForLevel(Index, Pickup)) { continue; }
+		++PickupCount;
+		TestTrue(FString::Printf(TEXT("Echo pickup in chapter %d is reachable"), Index + 1),
+			FGridTestSearch::CanVisit(*Levels[Index], Pickup));
+	}
+	TestEqual(TEXT("Only selected chapters contain echo pickups"), PickupCount, 6);
+	FIntPoint Missing;
+	TestFalse(TEXT("Chapter 2 is not a new-mechanic chapter and has no echo pickup"),
+		AGridManager::GetEchoLocationForLevel(1, Missing));
+	TestFalse(TEXT("Chapter 2 does not show a new-mechanic popup for its side pocket route"),
+		AGridManager::LevelHasMechanicIntro(1));
+	TestFalse(TEXT("Chapter 4 does not treat route planning as a new mechanism"),
+		AGridManager::LevelHasMechanicIntro(3));
+	TestFalse(TEXT("Chapter 10 does not show a popup for a new use of an existing imprint"),
+		AGridManager::LevelHasMechanicIntro(9));
+	TestTrue(TEXT("Chapter 3 introduces switches and locked goals"),
+		AGridManager::LevelHasMechanicIntro(2));
 	return true;
 }
 

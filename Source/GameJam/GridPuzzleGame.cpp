@@ -71,6 +71,14 @@ void AGridManager::Initialize(APlayerController& Controller)
 		if (const UGridPuzzleProgress* Saved = Cast<UGridPuzzleProgress>(UGameplayStatics::LoadGameFromSlot(ProgressSlot, 0)))
 		{
 			CompletedMainLevels = FMath::Clamp(Saved->CompletedMainLevels, 0, MainLevelCount);
+			for (const int32 Echo : Saved->EarnedEchoes)
+			{
+				if (Echo >= 0 && Echo < CampaignLevelCount) { EarnedEchoes.Add(Echo); }
+			}
+			for (const int32 Intro : Saved->SeenMechanicIntros)
+			{
+				if (Intro >= 0 && Intro < CampaignLevelCount) { SeenMechanicIntros.Add(Intro); }
+			}
 		}
 	}
 	if (!PaletteMaterial)
@@ -181,6 +189,8 @@ bool AGridManager::LoadLevel(int32 Index)
 	Feedback = FText::GetEmpty();
 	UnlockInputAt = 0.f;
 	bEndingReady = false;
+	bMechanicIntroPending = Index < CampaignLevelCount && LevelHasMechanicIntro(Index) &&
+		!SeenMechanicIntros.Contains(Index);
 
 	for (const auto& Pair : Rules.GetTiles())
 	{
@@ -209,6 +219,14 @@ bool AGridManager::LoadLevel(int32 Index)
 			}
 		}
 	}
+	FIntPoint EchoPosition;
+	if (GetEchoLocationForLevel(LevelIndex, EchoPosition) && !EarnedEchoes.Contains(LevelIndex))
+	{
+		if (AGridTile* EchoTile = TileActors.FindRef(EchoPosition))
+		{
+			EchoTile->SetEchoAvailable(true, PaletteMaterial);
+		}
+	}
 	for (EPlayerRole Traveler : Roles)
 	{
 		const FIntPoint Position = Rules.GetPosition(Traveler);
@@ -226,8 +244,10 @@ bool AGridManager::LoadLevel(int32 Index)
 
 void AGridManager::SetScreen(EGridScreen NewScreen)
 {
-	Screen = NewScreen;
+	Screen = NewScreen == EGridScreen::Playing && bMechanicIntroPending ?
+		EGridScreen::MechanicIntro : NewScreen;
 	const bool bPaused = Screen == EGridScreen::Paused ||
+		Screen == EGridScreen::MechanicIntro ||
 		(Screen == EGridScreen::Controls && bControlsFromPause);
 	Player->SetPause(bPaused);
 	const bool bMenuInput = Screen != EGridScreen::Playing && Screen != EGridScreen::Transition;
@@ -291,6 +311,15 @@ void AGridManager::ShowSelection()
 	SetScreen(EGridScreen::Selection);
 }
 
+void AGridManager::DismissMechanicIntro()
+{
+	if (Screen != EGridScreen::MechanicIntro) { return; }
+	SeenMechanicIntros.Add(LevelIndex);
+	bMechanicIntroPending = false;
+	PersistProgress();
+	SetScreen(EGridScreen::Playing);
+}
+
 bool AGridManager::CanSelectLevel(int32 Index) const
 {
 	return Levels.IsValidIndex(Index) && (Index >= CampaignLevelCount ||
@@ -324,15 +353,45 @@ void AGridManager::Advance()
 
 void AGridManager::SaveLevelProgress()
 {
-	if (IsChallenge() || IsPrototype() || GetLevelNumber() <= CompletedMainLevels) { return; }
-	CompletedMainLevels = GetLevelNumber();
+	bool bChanged = false;
+	if (!IsChallenge() && !IsPrototype() && GetLevelNumber() > CompletedMainLevels)
+	{
+		CompletedMainLevels = GetLevelNumber();
+		bChanged = true;
+	}
+	if (bChanged) { PersistProgress(); }
+}
+
+void AGridManager::PersistProgress()
+{
 	UGridPuzzleProgress* Save = CastChecked<UGridPuzzleProgress>(
 		UGameplayStatics::CreateSaveGameObject(UGridPuzzleProgress::StaticClass()));
 	Save->CompletedMainLevels = CompletedMainLevels;
+	Save->EarnedEchoes = EarnedEchoes.Array();
+	Save->SeenMechanicIntros = SeenMechanicIntros.Array();
 	if (!UGameplayStatics::SaveGameToSlot(Save, ProgressSlot, 0))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Could not save One Step progress to slot %s."), ProgressSlot);
 	}
+}
+
+bool AGridManager::TryCollectEchoAt(FIntPoint Position)
+{
+	FIntPoint EchoPosition;
+	if (!GetEchoLocationForLevel(LevelIndex, EchoPosition) || EchoPosition != Position ||
+		GetLevelEchoName(LevelIndex).IsEmpty() || EarnedEchoes.Contains(LevelIndex))
+	{
+		return false;
+	}
+	EarnedEchoes.Add(LevelIndex);
+	if (AGridTile* EchoTile = TileActors.FindRef(Position))
+	{
+		EchoTile->SetEchoAvailable(false, PaletteMaterial);
+	}
+	SetFeedback(FText::Format(LOCTEXT("EchoCollected", "发现回响 · {0}"), GetLevelEchoName(LevelIndex)));
+	PersistProgress();
+	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
+	return true;
 }
 
 void AGridManager::TogglePause()
@@ -346,6 +405,7 @@ void AGridManager::TogglePause()
 	}
 	switch (Screen)
 	{
+	case EGridScreen::MechanicIntro: DismissMechanicIntro(); break;
 	case EGridScreen::Playing: SetScreen(EGridScreen::Paused); break;
 	case EGridScreen::Paused: SetScreen(EGridScreen::Playing); break;
 	case EGridScreen::Controls: SetScreen(bControlsFromPause ? EGridScreen::Paused : EGridScreen::Menu); break;
@@ -379,7 +439,6 @@ void AGridManager::UndoMove()
 		if (Screen == EGridScreen::Playing) { SetFeedback(LOCTEXT("NothingToUndo", "还没有可以撤销的移动")); }
 		return;
 	}
-
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
 	GetWorldTimerManager().ClearTimer(ScreenTimer);
 	FUndoStep Step = UndoHistory.Pop(EAllowShrinking::No);
@@ -490,6 +549,140 @@ FText AGridManager::GetLevelHint() const
 {
 	return Levels.IsValidIndex(LevelIndex) && Levels[LevelIndex] ? Levels[LevelIndex]->Hint :
 		LOCTEXT("MissingLevel", "关卡数据未配置");
+}
+
+int32 AGridManager::GetEchoTargetCount() const
+{
+	return 6;
+}
+
+bool AGridManager::GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosition)
+{
+	switch (LevelIndex)
+	{
+	case 0: OutPosition = {2, 2}; return true;
+	case 4: OutPosition = {2, 2}; return true;
+	case 6: OutPosition = {4, 4}; return true;
+	case 9: OutPosition = {4, 3}; return true;
+	case 12: OutPosition = {5, 1}; return true;
+	case 13: OutPosition = {7, 4}; return true;
+	default: return false;
+	}
+}
+
+bool AGridManager::LevelHasMechanicIntro(int32 LevelIndex)
+{
+	switch (LevelIndex)
+	{
+	case 0:
+	case 2:
+	case 4:
+	case 5:
+	case 6:
+	case 7:
+	case 8:
+	case 10:
+	case 11:
+	case 12:
+	case 13:
+		return true;
+	default:
+		return false;
+	}
+}
+
+FText AGridManager::GetLevelEchoName(int32 Index) const
+{
+	switch (Index)
+	{
+	case 0: return LOCTEXT("Echo01", "初见回响");
+	case 4: return LOCTEXT("Echo05", "脆石回声");
+	case 6: return LOCTEXT("Echo07", "两印之间");
+	case 9: return LOCTEXT("Echo10", "岔路回声");
+	case 12: return LOCTEXT("Echo13", "旧路藏声");
+	case 13: return LOCTEXT("Echo14", "岸边迟信");
+	default: return FText::GetEmpty();
+	}
+}
+
+FText AGridManager::GetMechanicIntroTitle() const
+{
+	switch (LevelIndex)
+	{
+	case 0: return LOCTEXT("IntroTitle01", "借同伴的脚印");
+	case 2: return LOCTEXT("IntroTitle03", "开关与锁定终点");
+	case 4: return LOCTEXT("IntroTitle05", "脆弱石板");
+	case 5: return LOCTEXT("IntroTitle06", "TURN · 转动桥面");
+	case 6: return LOCTEXT("IntroTitle07", "OUT 与 IN · 寄送脚印");
+	case 7: return LOCTEXT("IntroTitle08", "REC 与 PLAY · 录印回放");
+	case 8: return LOCTEXT("IntroTitle09", "一次性印板");
+	case 10: return LOCTEXT("IntroTitle11", "保存拓本");
+	case 11: return LOCTEXT("IntroTitle12", "SWAP 与 TURN · 交班");
+	case 12: return LOCTEXT("IntroTitle13", "旧印复原");
+	case 13: return LOCTEXT("IntroTitle14", "延迟寄印");
+	default: return FText::GetEmpty();
+	}
+}
+
+FText AGridManager::GetMechanicIntroBody() const
+{
+	switch (LevelIndex)
+	{
+	case 0:
+		return LOCTEXT("IntroBody01",
+			"你不能踩自己刚留下的脚印，但可以踩同伴的脚印。踩上去时，这格会变成你的颜色，并留给同伴继续借。\n按 Tab 切换当前角色；角色切换本身不计步。");
+	case 2:
+		return LOCTEXT("IntroBody03",
+			"带锁终点只允许对应角色进入，并需要同色的开关先被踩亮。开关启动后，锁会在本局一直保持打开。\n终点上的小旗和字母标出它属于 A 还是 B。");
+	case 4:
+		return LOCTEXT("IntroBody05",
+			"脆弱石板上的橙色竖条表示剩余借用次数。有人站住时倒计时暂停；离开后，每次成功移动都会让它减少一格。\n只剩最后一格时会闪烁，此时仍能接手。成功换上自己的脚印会恢复本关寿命。");
+	case 5:
+		return LOCTEXT("IntroBody06",
+			"站上 TURN 碑按 E，可以预览桥面转动后的落点，再按 E 确认。桥上的脚印会跟着石板一起转过去。\n确认前两人都必须离开当前桥面；桥上有人时不能转桥。");
+	case 6:
+		return LOCTEXT("IntroBody07",
+			"OUT 是发件印板：角色踩上 OUT 的瞬间会读取连线来源的颜色，并寄给对应的 IN 印板。\nIN 是收件印板：它保留寄出瞬间的颜色；角色必须踩上这格才能借用，踩上后会改成自己的颜色。目标暂时被占用时显示 WAIT，等目标腾空后再送达。");
+	case 7:
+		return LOCTEXT("IntroBody08",
+			"A 站上 REC 按 E 开始录制，之后三次成功移动会成为方向和节奏。B 站上 PLAY 按 E 可以先预览整段路线，再确认回放。\n被拒绝的移动不会录入；回放要求每一步都能借到 A 的蓝色脚印。切换角色不会打断已经录下的内容。");
+	case 8:
+		return LOCTEXT("IntroBody09",
+			"标着 1 的印板只能消费一次。站上去时它还完整，离开后会立即坍塌，不能再回来。\n决定由谁先用、何时离开，是这一关的核心。");
+	case 10:
+		return LOCTEXT("IntroBody11",
+			"第一块满足条件的印板会保存一份拓本；之后即使原印再次改色，保存下来的拓本仍保留当时的颜色。\n拓本是一次性记录，不能重复覆盖。看清哪一块是可继续改写的原印，哪一块是已经锁定的历史印。");
+	case 11:
+		return LOCTEXT("IntroBody12",
+			"让两人分别站上相邻的 SWAP 印板并按 E，可以一次交换位置。站在 TURN 碑上时，同一个 E 键用于转桥或换位。\n先预览落点，再确认；桥面和脚印会一起转向。");
+	case 12:
+		return LOCTEXT("IntroBody13",
+			"旧印机关会记录某一刻的颜色，并在条件满足后把这份历史颜色复原到印板上。\n复原改变的是印板，不会移动角色。先安排两人的站位，再决定封存哪一枚印。");
+	case 13:
+		return LOCTEXT("IntroBody14",
+			"延迟送印不会立刻改变 IN 印板。触发后要等三次成功移动，脚印才会抵达；期间 IN 会以 WAIT 闪烁。\n换角色不会重置倒计时，目标被占用时也会等待。走路和交接可以同时推进送印。");
+	default:
+		return FText::GetEmpty();
+	}
+}
+
+FText AGridManager::GetMechanicIntroExample() const
+{
+	switch (LevelIndex)
+	{
+	case 0: return LOCTEXT("IntroExample01", "A 走过一格留下蓝印 → Tab 切到 B → B 借这枚蓝印前进");
+	case 2: return LOCTEXT("IntroExample03", "让标记对应的角色踩亮开关 → 再去自己的锁门终点");
+	case 4: return LOCTEXT("IntroExample05", "先靠近石板 → 让原主人离开 → 在下一次或最后一次计数内接手");
+	case 5: return LOCTEXT("IntroExample06", "站上 TURN 按 E 预览 → 确认两人都在桥外 → 再按 E 转向");
+	case 6: return LOCTEXT("IntroExample07", "角色踩上 OUT → 颜色沿连线抵达 IN → 另一角色走到 IN 借用");
+	case 7: return LOCTEXT("IntroExample08", "A 在 REC 开始录印 → 走三步并让开 → B 在 PLAY 预览并回放");
+	case 8: return LOCTEXT("IntroExample09", "需要回程时不要先走一次性印板 → 让真正要离开的人最后消费它");
+	case 10: return LOCTEXT("IntroExample11", "先用要求的颜色保存拓本 → 之后再安全改掉原印");
+	case 11: return LOCTEXT("IntroExample12", "两人站上相邻 SWAP 印板 → 按 E 预览换位 → 再按 E 同时迈步");
+	case 12: return LOCTEXT("IntroExample13", "先封存同伴需要的颜色 → 等两人站位完成 → 再触发复原");
+	case 13: return LOCTEXT("IntroExample14", "踩上寄印触发点 → 三次成功移动内走向 IN → 接住随后出现的颜色");
+	default: return FText::GetEmpty();
+	}
 }
 
 FText AGridManager::GetRecordingStatus() const
@@ -674,6 +867,8 @@ void AGridManager::UseAction()
 		UpdateControl();
 		UnlockInputAt = GetWorld()->GetTimeSeconds() + SwapTime;
 		SetFeedback(LOCTEXT("SwapDone", "两人同时借到了同伴刚让出的脚印"));
+		TryCollectEchoAt(Rules.GetPosition(EPlayerRole::PlayerA));
+		TryCollectEchoAt(Rules.GetPosition(EPlayerRole::PlayerB));
 		if (bPlaySound) { PlayGridSound(this, EGridSound::Transfer); }
 		return;
 	}
@@ -761,6 +956,7 @@ void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 	{
 		SetFeedback(LOCTEXT("BridgeExit", "桥已合拢，仍可向相邻的石板离开。"));
 	}
+	TryCollectEchoAt(MoveResult.To);
 	if (bPlaySound)
 	{
 		EGridSound Sound = EGridSound::Step;
@@ -931,6 +1127,7 @@ void AGridPuzzlePlayerController::Confirm()
 	switch (Manager->GetScreen())
 	{
 	case EGridScreen::Menu: Manager->Start(); break;
+	case EGridScreen::MechanicIntro: Manager->DismissMechanicIntro(); break;
 	case EGridScreen::Paused:
 	case EGridScreen::Controls: Manager->TogglePause(); break;
 	case EGridScreen::Complete: Manager->Advance(); break;
