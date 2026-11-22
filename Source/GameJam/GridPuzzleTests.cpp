@@ -796,6 +796,14 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 			}
 		}
 		TestTrue(TEXT("Both players finish on their original board"), Rules.IsComplete());
+		// 直接搜索禁用转桥／回放／换位后的合法局面，检查同图里的机关依赖。
+		if (Index == 3 || Index == 4)
+		{
+			TestFalse(TEXT("The turning bridge cannot be bypassed"),
+				FGridTestSearch::CanClear(*Board, EGridPrototype::TurnBridge));
+			TestFalse(TEXT("The other interactive mechanism cannot be bypassed"),
+				FGridTestSearch::CanClear(*Board, Index == 3 ? EGridPrototype::RecordRoute : EGridPrototype::SwapPlaces));
+		}
 	}
 	return true;
 }

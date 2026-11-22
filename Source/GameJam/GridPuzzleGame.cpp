@@ -1141,16 +1141,6 @@ void AGridManager::CheckCompletion()
 	if (Rules.IsComplete())
 	{
 		const float AnimationRemaining = FMath::Max(0.f, UnlockInputAt - GetWorld()->GetTimeSeconds());
-		if (SectionIndex + 1 < GetSectionCount())
-		{
-			SetScreen(EGridScreen::Transition);
-			GetWorldTimerManager().SetTimer(ScreenTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
-			{
-				ChapterMoveCount += Rules.GetMoveCount();
-				if (LoadLevel(LevelIndex, SectionIndex + 1, true)) { SetScreen(EGridScreen::Playing); }
-			}), FMath::Max(StepTime * 2.f, AnimationRemaining + .1f), false);
-			return;
-		}
 		SaveLevelProgress();
 		SetScreen(EGridScreen::Transition);
 		OnLevelCompleted.Broadcast();

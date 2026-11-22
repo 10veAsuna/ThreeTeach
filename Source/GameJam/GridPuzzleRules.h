@@ -168,7 +168,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion", meta=(ClampMin="2")) int32 RhythmPeriod = 3;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion", meta=(ClampMin="0")) int32 RhythmClosedPhase = 2;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fusion") TArray<FIntPoint> PatrolRoute;
-	// 章节按区域连续推进，子关卡资源保留各自机关和布局。
+	// 兼容 V6 的子关卡资源；正式主线使用独立棋盘，运行时会迁移旧容器。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Chapter") TArray<TObjectPtr<UGridLevelDataAsset>> Sections;
 };
 
