@@ -209,11 +209,7 @@ namespace
 			[
 				Card(SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight()[Text(Chapter, 14, Blue, true)]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[Text(Manager.GetLevelTitle(), 28)]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)
-					[Text(FText::Format(LOCTEXT("SectionProgress", "区域 {0}/{1} · {2}"),
-						FText::AsNumber(Manager.GetSectionNumber()), FText::AsNumber(Manager.GetSectionCount()),
-						Manager.GetSectionTitle()), 16, Muted)],
+					+ SVerticalBox::Slot().AutoHeight().Padding(0,3,0,0)[Text(Manager.GetLevelTitle(), 28)],
 					Panel, FMargin(16,8))
 			]
 			+ SHorizontalBox::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top)

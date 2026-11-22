@@ -760,30 +760,48 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Failed icy replay discards snapshots"), States.IsEmpty());
 	TestEqual(TEXT("Icy replay preview preserves live state"), FGridTestSearch::StateKey(ReplayIce), BeforeReplay);
 
-	const TArray<UGridLevelDataAsset*> Original = AGridManager::CreateDefaultLevels();
-	const TArray<UGridLevelDataAsset*> Chapters = AGridManager::CreateCampaignLevels(Original);
-	TestEqual(TEXT("Campaign has five long chapters"), Chapters.Num(), 5);
-	TSet<int32> Included;
-	int32 Sections = 0;
-	for (const UGridLevelDataAsset* Chapter : Chapters)
+	const auto Chapters = AGridManager::CreateCampaignLevels();
+	const TCHAR* Routes[] = {
+		TEXT("BU BD AR AR AR AR AD AD AR AR AR AR BU BR BR BR BD BD BR BR BR BD AL AL AL AL AU AU AL AL AL AL AU"),
+		TEXT("AR AR BL AU BL BL BL AD AR BR BU AL BU AL BD BD BD AR AU AU AU AR AR AR BD"),
+		TEXT("AR AR AR AD AD AR BR BR BR BR BU BU BU AL AD AD AR AR AU BU BR BR BD BD BL AU AU AU AR AR AU BR BD BD BR BR BD AR AR BD"),
+		TEXT("AR AR BR BR AR AE AR AR AU AR AD AR AR AD AU AE BR BR BE BR AL AL AL AL AL AL AL AL AU BR BR"),
+		TEXT("AR BR AR AR BR BR AR BR BR BU AR BU BU AE AD AD AD AR AR AR BE BR AD AD BR BR BU BU"),
+	};
+	if (!TestEqual(TEXT("Five playable campaign boards"), Chapters.Num(), 5)) { return false; }
+	for (int32 Index = 0; Index < Chapters.Num(); ++Index)
 	{
-		TestTrue(TEXT("Chapter contains multiple areas"), Chapter->Sections.Num() >= 3);
-		for (const UGridLevelDataAsset* Section : Chapter->Sections)
+		const auto* Board = Chapters[Index];
+		FGridPuzzleRules Rules;
+		if (!TestTrue(Board->Title.ToString(), Board->Sections.IsEmpty() && Rules.Initialize(*Board))) { return false; }
+		TArray<FString> Inputs;
+		FString(Routes[Index]).ParseIntoArrayWS(Inputs);
+		for (const FString& Input : Inputs)
 		{
-			++Sections;
-			FGridPuzzleRules Rules;
-			TestTrue(TEXT("Every chapter area initializes"), Rules.Initialize(*Section));
-			if (Section->LegacyChapterIndex != INDEX_NONE) { Included.Add(Section->LegacyChapterIndex); }
-			else { TestFalse(TEXT("Combined area has a solution"), FGridTestSearch::SolveFusion(*Section).IsEmpty()); }
+			const EPlayerRole Role = Input[0] == 'A' ? Blue : Orange;
+			if (Input[1] == 'E')
+			{
+				FGridMove ExchangeMove;
+				TArray<FIntPoint> DeckChanges;
+				if (Rules.TrySwap(Role, ExchangeMove) || Rules.TryTurnBridge(Role, DeckChanges) || Rules.StartRecording(Role)) { continue; }
+				TArray<FGridMove> Moves;
+				TArray<FGridPuzzleRules> CampaignStates;
+				if (!TestTrue(TEXT("Legal replay on campaign board"), Rules.PlanReplay(Role, Moves, CampaignStates))) { return false; }
+				Rules = MoveTemp(CampaignStates.Last());
+			}
+			else
+			{
+				const FIntPoint Dir = Input[1] == 'R' ? Right : Input[1] == 'L' ? Left : Input[1] == 'U' ? Up : Down;
+				if (!TestTrue(Board->Title.ToString() + TEXT(" ") + Input, Rules.TryMove(Role, Dir).Result == EGridMoveResult::Moved)) { return false; }
+			}
 		}
+		TestTrue(TEXT("Both players finish on their original board"), Rules.IsComplete());
 	}
-	TestEqual(TEXT("All fourteen original mechanisms retained"), Included.Num(), 14);
-	TestEqual(TEXT("All four new experiments join the campaign"), Sections, 18);
 	return true;
 }
 
-// 使用真实管理器和运行时 Actor 检查跨区衔接，避免只测规则而遗漏场景与撤销历史。
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridChapterRuntimeTest, "OneStep.Runtime.ChapterHandoff",
+// 使用真实管理器和运行时 Actor 检查整图内开锁与撤销，避免只测规则而遗漏场景与撤销历史。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridChapterRuntimeTest, "OneStep.Runtime.ContinuousBoard",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
@@ -805,25 +823,22 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	Manager->LoadLevel(0);
 	Manager->SetScreen(EGridScreen::Playing);
 	World->GetTimerManager().Tick(0.f);
-	const TCHAR* Path[] = {TEXT("AR"),TEXT("AR"),TEXT("AU"),TEXT("AU"),TEXT("BL"),TEXT("BL"),TEXT("BD"),TEXT("BD")};
+	AGridTile* OriginalGoal = Manager->TileActors.FindRef({0, 0});
+	TestEqual(TEXT("Campaign map has one board"), Manager->GetSectionCount(), 1);
+	const TCHAR* Path[] = {TEXT("BU"), TEXT("BD"), TEXT("AR"), TEXT("AR"), TEXT("AR"), TEXT("AR"),
+		TEXT("AD"), TEXT("AD"), TEXT("AR"), TEXT("AR"), TEXT("AR"), TEXT("AR")};
 	for (const TCHAR* Step : Path)
 	{
 		Manager->ActiveRole = Step[0] == 'A' ? Blue : Orange;
 		Manager->UnlockInputAt = 0.f;
-		const FIntPoint Direction = Step[1] == 'R' ? Right : Step[1] == 'L' ? Left : Step[1] == 'U' ? Up : Down;
-		Manager->Move(Direction);
+		Manager->Move(Step[1] == 'R' ? Right : Step[1] == 'U' ? Up : Down);
 	}
-	TestTrue(TEXT("First area completes"), Manager->Rules.IsComplete());
-	// 定时器同一引擎帧只执行一次，推进帧号后检查真实的自动衔接回调。
-	++GFrameCounter;
-	World->GetTimerManager().Tick(1.f);
-	TestEqual(TEXT("Automatically enters second area"), Manager->GetSectionNumber(), 2);
-	TestEqual(TEXT("Chapter accumulates steps"), Manager->GetMoveCount(), 8);
-	TestTrue(TEXT("Earlier area undo history retained"), Manager->HasUndoMove());
+	TestFalse(TEXT("Switch unlocks the far goal"), Manager->Rules.GetTiles().FindChecked({0, 0}).bIsLocked);
+	TestFalse(TEXT("Operating the switch does not finish the board"), Manager->Rules.IsComplete());
 	Manager->UndoMove();
-	TestEqual(TEXT("Undo crosses back into first area"), Manager->GetSectionNumber(), 1);
-	TestEqual(TEXT("Undo restores chapter move total"), Manager->GetMoveCount(), 7);
-	TestFalse(TEXT("Undo restores unfinished board"), Manager->Rules.IsComplete());
+	TestTrue(TEXT("Undo restores the lock"), Manager->Rules.GetTiles().FindChecked({0, 0}).bIsLocked);
+	TestTrue(TEXT("The same goal actor remains on screen"), OriginalGoal && Manager->TileActors.FindRef({0, 0}) == OriginalGoal);
+	TestEqual(TEXT("Undo restores the board step count"), Manager->GetMoveCount(), 11);
 	Manager->ResetLevel();
 	TestEqual(TEXT("Reset restarts whole chapter"), Manager->GetMoveCount(), 0);
 	TestFalse(TEXT("Reset clears undo history"), Manager->HasUndoMove());

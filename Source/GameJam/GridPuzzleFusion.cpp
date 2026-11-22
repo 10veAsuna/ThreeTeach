@@ -93,41 +93,75 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateFusionLevels()
 	return Result;
 }
 
-TArray<UGridLevelDataAsset*> AGridManager::CreateCampaignLevels(const TArray<UGridLevelDataAsset*>& SourceLevels)
+TArray<UGridLevelDataAsset*> AGridManager::CreateCampaignLevels()
 {
-	if (SourceLevels.Num() != 14) { return {}; }
-	for (int32 Index = 0; Index < SourceLevels.Num(); ++Index)
+	// 旧版资产可以是十四张原图，也可以是五个章节容器。新版直接生成五张棋盘。
+	// 机关坐标和地形成对设计，采用配套的原始布局作为底图。
+	const auto Original = CreateDefaultLevels();
+	TArray<UGridLevelDataAsset*> Maps;
+	const auto Map = [&](int32 Base, FText Title, FText Hint)
 	{
-		if (!SourceLevels[Index]) { return {}; }
-		SourceLevels[Index]->LegacyChapterIndex = Index;
-	}
-	TArray<UGridLevelDataAsset*> Chapters;
-	const auto Add = [&Chapters, &SourceLevels](FText Title, TArray<int32> Indices)
-	{
-		UGridLevelDataAsset* Chapter = NewObject<UGridLevelDataAsset>();
-		Chapter->Title = MoveTemp(Title);
-		for (int32 Index : Indices) { Chapter->Sections.Add(SourceLevels[Index]); }
-		Chapters.Add(Chapter);
-		return Chapter;
+		UGridLevelDataAsset* Board = Original[Base];
+		Board->Title = MoveTemp(Title);
+		Board->Hint = MoveTemp(Hint);
+		Maps.Add(Board);
+		return Board;
 	};
-	const TArray<UGridLevelDataAsset*> Fusion = CreateFusionLevels();
-	Add(LOCTEXT("Chapter1", "第一章 · 交替留路"), {0, 1, 2});
-	UGridLevelDataAsset* Second = Add(LOCTEXT("Chapter2", "第二章 · 把路借给你"), {3, 4, 8});
-	Second->Sections.Add(Fusion[1]);
-	UGridLevelDataAsset* Third = Add(LOCTEXT("Chapter3", "第三章 · 印记中转站"), {6, 9, 10});
-	Third->Sections.Add(Fusion[0]);
-	// 同一块地图中组合推箱、冰面与节拍，滑行会逐格推箱和推进拍点。
-	UGridLevelDataAsset* Combined = DuplicateObject<UGridLevelDataAsset>(Fusion[0], GetTransientPackage());
-	Combined->Title = LOCTEXT("CombinedTitle", "滑行搬运站");
-	Combined->Hint = LOCTEXT("CombinedHint", "先滑行推箱让出路，再让同伴借印反推。BEAT 格需配合另一人的落脚时机。");
-	Combined->IceTiles = {{2, 1}};
-	Combined->RhythmTiles = {{4, 1}};
-	Third->Sections.Last() = Combined;
-	UGridLevelDataAsset* Fourth = Add(LOCTEXT("Chapter4", "第四章 · 隔岸同拍"), {5, 7});
-	Fourth->Sections.Add(Fusion[2]);
-	UGridLevelDataAsset* Fifth = Add(LOCTEXT("Chapter5", "第五章 · 一路接住你"), {11, 12, 13});
-	Fifth->Sections.Add(Fusion[3]);
-	return Chapters;
+	constexpr auto A = EFootprintOwner::PlayerA;
+	constexpr auto B = EFootprintOwner::PlayerB;
+	const auto Send = [](UGridLevelDataAsset* Board, FIntPoint Trigger, EFootprintOwner RequiredOwner,
+		FIntPoint Source, FIntPoint Destination, int32 Delay = 0)
+	{
+		auto& Effect = Board->PrintEffects.AddDefaulted_GetRef();
+		Effect.Trigger = Trigger;
+		Effect.TriggerOwner = RequiredOwner;
+		Effect.Links.Emplace(Source, Destination);
+		Effect.DelayMoves = Delay;
+		Effect.bOnce = true;
+	};
+
+	auto* First = Map(2, LOCTEXT("Map1", "第一章 · 回来接我"),
+		LOCTEXT("Map1Hint", "B 先给 A 写下入口印。A 走到尽头开锁，B 再沿原路把 A 的回程改成橙印。"));
+	First->Rows = {TEXT("x"), TEXT("Auooo"), TEXT(" B  o"), TEXT("    oooos"), TEXT("       b")};
+
+	auto* Second = Map(4, LOCTEXT("Map2", "第二章 · 薄冰交班"),
+		LOCTEXT("Map2Hint", "两人要在同一块脆石上交班。把上岸的脚印留好，最后从冰道滑过一次性石板。"));
+	Second->Rows[0] = TEXT("  mocca");
+	Second->IceTiles = {{3, 0}};
+	Send(Second, {2, 4}, B, {2, 4}, {2, 0});
+
+	auto* Third = Map(6, LOCTEXT("Map3", "第三章 · 印记中转站"),
+		LOCTEXT("Map3Hint", "两岸同时留下正确印色。A 沿冰面去推箱，把蓝印寄到南岸；B 在南岸回寄橙印，A 才能出站。"));
+	Third->Rows[0] = TEXT("        o");     // 箱子的停放点
+	Third->Rows[1] = TEXT("        oma");  // 推箱位、等回信的空印、A 出口
+	Third->Rows[7] = TEXT("        m");
+	Third->Crates = {{8, 1}};
+	Third->IceTiles = {{1, 2}};
+	Third->RhythmTiles = {{2, 6}};
+	Send(Third, {8, 1}, A, {8, 1}, {8, 7});
+	Send(Third, {8, 7}, B, {8, 7}, {9, 1});
+
+	auto* Fourth = Map(7, LOCTEXT("Map4", "第四章 · 隔岸同拍"),
+		LOCTEXT("Map4Hint", "录下转弯的三步给 B。A 到东岸后在桥头留印、退回开关转桥，B 才能踩着这枚印走完回放后的路。"));
+	Fourth->Rows[3] = TEXT("        o");
+	Fourth->Rows[5] = TEXT("      mu b");
+	Fourth->Rows[6] = TEXT("Bmuuumm");
+	Fourth->TurnPivot = {7, 4};
+	Fourth->InitialDeck = {{8, 3}};
+	Fourth->AlternateDeck = {{8, 5}};
+	Fourth->TurnControls = {{8, 2}};
+	Fourth->RhythmTiles = {{1, 2}};
+
+	auto* Fifth = Map(11, LOCTEXT("Map5", "第五章 · 一路接住你"),
+		LOCTEXT("Map5Hint", "看巡逻点让步，互寄脚印到会合处。换位后把桥转给同伴；南岸保存的拓印，要等 A 到岸才会寄回北边。"));
+	Fifth->Rows[1] = TEXT(" ##     m");
+	Fifth->Rows[6] += TEXT("m"); // 隔空碑保存 B 的印色
+	Fifth->PatrolRoute = {{1, 1}, {2, 1}, {2, 2}, {1, 2}};
+	// 北岸门前的蓝印延时送达。南岸则取出此前寄存的橙印。
+	Fifth->PrintEffects[0].DelayMoves = 2;
+	Fifth->PrintEffects[1].Links[0].Target = {9, 6};
+	Send(Fifth, {8, 6}, A, {9, 6}, {8, 7}, 1);
+	return Maps;
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -33,7 +33,7 @@ def save(obj):
         raise RuntimeError(f'Could not save {obj.get_path_name()}')
 
 
-# V6 资源保留原关卡内容，并把关卡组装为带子区域的五个章节。
+# V7 章资源直接保存一张可玩的棋盘。
 LEVEL_FIELDS = (
     'title', 'hint', 'rows', 'fragile_lifetime', 'bridges', 'print_effects',
     'require_borrowed_prints', 'challenge', 'prototype', 'turn_controls', 'turn_pivot',
@@ -80,37 +80,12 @@ def material():
 
 def main():
     palette = material()
-    levels = []
-    for i, default in enumerate(ue.GridManager.create_default_levels(), 1):
-        # 普通关卡使用 V4 目录，带转桥、录制或换位的关卡使用 V5 目录。
-        factory = ue.DataAssetFactory()
-        factory.set_editor_property('data_asset_class', ue.GridLevelDataAsset)
-        version = 'V4' if default.get_editor_property('prototype') == ue.GridPrototype.NONE else 'V5'
-        name = f'DA_{version}_Chapter{i:02}'
-        folder = f'Levels/{version}'
-        existed = ASSETS.does_asset_exist(path(name, folder))
-        level = asset(name, folder, ue.GridLevelDataAsset, factory)
-        if not existed:
-            # 新建关卡从 C++ 默认定义复制字段，已存在的关卡保留资源内的配置。
-            for field in ('title', 'hint', 'rows', 'fragile_lifetime', 'bridges', 'print_effects',
-                          'require_borrowed_prints', 'challenge', 'prototype', 'turn_controls', 'turn_pivot',
-                          'initial_deck', 'alternate_deck', 'record_start', 'replay_start', 'replay_tiles', 'swap_tiles'):
-                level.set_editor_property(field, default.get_editor_property(field))
-            save(level)
-        levels.append(level)
-
     # 独立实验使用单独资源，之后组合到长章时仍可单独试玩。
     for i, default in enumerate(ue.GridManager.create_fusion_levels(), 1):
         persist_level(default, f'DA_V6_Experiment{i:02}', 'Levels/V6/Experiments')
     chapters = []
-    for i, default in enumerate(ue.GridManager.create_campaign_levels(levels), 1):
-        rooms = []
-        for j, section in enumerate(default.get_editor_property('sections'), 1):
-            rooms.append(persist_level(section, f'DA_V6_Room{i:02}_{j:02}', 'Levels/V6/Rooms'))
-        chapter = persist_level(default, f'DA_V6_Chapter{i:02}', 'Levels/V6')
-        chapter.set_editor_property('sections', rooms)
-        save(chapter)
-        chapters.append(chapter)
+    for i, default in enumerate(ue.GridManager.create_campaign_levels(), 1):
+        chapters.append(persist_level(default, f'DA_V7_Chapter{i:02}', 'Levels/V7'))
     if len(chapters) != 5:
         raise RuntimeError('Expected five chapters before updating BP_Board')
 

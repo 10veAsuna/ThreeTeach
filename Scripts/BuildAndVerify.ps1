@@ -35,7 +35,7 @@ if (-not (Test-Path -LiteralPath $testLog)) { throw 'Automation log was not crea
 
 $successes = @(Select-String -LiteralPath $testLog -Pattern 'Test Completed\. Result=\{Success\}.*OneStep\.')
 $failures = @(Select-String -LiteralPath $testLog -Pattern 'Test Completed\. Result=\{Fail|Fatal error:|Assertion failed:')
-$requiredTests = @('OneStep.Rules.Fusion', 'OneStep.Runtime.ChapterHandoff')
+$requiredTests = @('OneStep.Rules.Fusion', 'OneStep.Runtime.ContinuousBoard')
 foreach ($test in $requiredTests) {
     if (-not ($successes | Where-Object { $_.Line.Contains($test) })) {
         throw "Required test did not succeed: $test. See $testLog"
@@ -49,7 +49,7 @@ if ($failures.Count -gt 0 -or $successes.Count -lt 9) {
     Success = $true
     Tests = $successes.Count
     Chapters = 5
-    Areas = 18
+    CampaignBoards = 5
     CompletedAt = (Get-Date).ToString('o')
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'Result.json') -Encoding utf8
 Write-Host 'Build, chapter import and automation tests completed successfully.'

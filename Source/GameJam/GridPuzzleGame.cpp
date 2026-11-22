@@ -86,17 +86,12 @@ void AGridManager::SaveUndo(FGridPuzzleRules Previous, EPlayerRole Mover, TArray
 void AGridManager::Initialize(APlayerController& Controller)
 {
 	Player = &Controller;
-	if (Levels.IsEmpty())
+	// 老版 BP_Board 储存的是十四张旧图，V6 储存的是五组分区；两者都改用整图。
+	if (Levels.IsEmpty() || Levels.Num() == 14 ||
+		(Levels.Num() == 5 && Levels[0] && !Levels[0]->Sections.IsEmpty()))
 	{
-		Levels.Append(CreateDefaultLevels());
-	}
-	// 兼容旧 BP_Board 中的 14 个单关配置，运行时自动组成五章。
-	if (Levels.Num() == 14 && Levels[0] && Levels[0]->Sections.IsEmpty())
-	{
-		TArray<UGridLevelDataAsset*> Original;
-		for (UGridLevelDataAsset* Level : Levels) { Original.Add(Level); }
 		Levels.Reset();
-		Levels.Append(CreateCampaignLevels(Original));
+		Levels.Append(CreateCampaignLevels());
 	}
 	// 第一个挑战关之前均为主线，追加的玩法试玩使用独立的索引区间。
 	const int32 FirstChallenge = Levels.IndexOfByPredicate([](const UGridLevelDataAsset* Level)
@@ -646,9 +641,27 @@ FText AGridManager::GetLevelHint() const
 		LOCTEXT("MissingLevel", "关卡数据未配置");
 }
 
+int32 AGridManager::GetEarnedEchoCount() const
+{
+	int32 Count = 0;
+	FIntPoint Position;
+	for (int32 Index = 0; Index < CampaignLevelCount; ++Index)
+	{
+		const int32 Key = Levels[Index]->LegacyChapterIndex;
+		Count += GetEchoLocationForLevel(Key, Position) && EarnedEchoes.Contains(Key);
+	}
+	return Count;
+}
+
 int32 AGridManager::GetEchoTargetCount() const
 {
-	return 6;
+	int32 Count = 0;
+	FIntPoint Position;
+	for (int32 Index = 0; Index < CampaignLevelCount; ++Index)
+	{
+		Count += GetEchoLocationForLevel(Levels[Index]->LegacyChapterIndex, Position);
+	}
+	return Count;
 }
 
 // 回响位置按从 0 开始的关卡索引配置，自动化测试会搜索其可达性。
@@ -786,7 +799,9 @@ FText AGridManager::GetMechanicIntroExample() const
 // 将录制方向转换成界面的箭头序列，显示已经录入的步数。
 FText AGridManager::GetRecordingStatus() const
 {
-	if (CurrentSection() && !CurrentSection()->RhythmTiles.IsEmpty())
+	if (!CurrentSection()) { return FText::GetEmpty(); }
+	if (!CurrentSection()->RhythmTiles.IsEmpty() &&
+		(CurrentSection()->Prototype != EGridPrototype::RecordRoute || (!Rules.IsRecording() && Rules.GetRecording().IsEmpty())))
 	{
 		return FText::Format(LOCTEXT("RhythmStatus", "下一次落脚 · 第 {0}/{1} 拍  |  BEAT WAIT 时请同伴让拍"),
 			FText::AsNumber((Rules.GetMoveCount() + 1) % Rules.GetRhythmPeriod() + 1), FText::AsNumber(Rules.GetRhythmPeriod()));
@@ -847,6 +862,10 @@ void AGridManager::UseAction()
 	FGridPuzzleRules Trial = Rules;
 	EGridPrototype Interaction = CurrentSection()->Prototype;
 	// 组合机关优先执行已满足的换位，尚不能换位时允许在 TURN 控制格转桥。
+	if (Interaction == EGridPrototype::RecordRoute && Rules.IsAtTurnControl(ActiveRole))
+	{
+		Interaction = EGridPrototype::TurnBridge;
+	}
 	if (Interaction == EGridPrototype::TurnBridgeAndSwap)
 	{
 		Interaction = Rules.IsAtTurnControl(ActiveRole) && !Rules.CanSwap() ?

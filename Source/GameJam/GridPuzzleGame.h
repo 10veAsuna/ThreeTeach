@@ -59,7 +59,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Puzzle") static TArray<UGridLevelDataAsset*> CreateDefaultLevels();
 	static TArray<UGridLevelDataAsset*> CreatePrototypeLevels();
 	UFUNCTION(BlueprintCallable, Category="Puzzle") static TArray<UGridLevelDataAsset*> CreateFusionLevels();
-	UFUNCTION(BlueprintCallable, Category="Puzzle") static TArray<UGridLevelDataAsset*> CreateCampaignLevels(const TArray<UGridLevelDataAsset*>& SourceLevels);
+	UFUNCTION(BlueprintCallable, Category="Puzzle") static TArray<UGridLevelDataAsset*> CreateCampaignLevels();
 
 	UFUNCTION(BlueprintCallable, Category="Puzzle") void Move(FIntPoint Direction);
 	UFUNCTION(BlueprintCallable, Category="Puzzle") void SwitchCharacter();
@@ -109,7 +109,7 @@ public:
 	FText GetRecordingStatus() const;
 	bool GetEndingReady() const { return bEndingReady; }
 	bool HasCurrentLevelEcho() const { return EarnedEchoes.Contains(GetSourceLevelIndex()); }
-	int32 GetEarnedEchoCount() const { return EarnedEchoes.Num(); }
+	int32 GetEarnedEchoCount() const;
 	int32 GetEchoTargetCount() const;
 	static bool GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosition);
 	static bool LevelHasMechanicIntro(int32 LevelIndex);

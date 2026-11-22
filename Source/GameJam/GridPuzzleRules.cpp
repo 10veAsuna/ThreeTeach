@@ -190,12 +190,8 @@ bool FGridPuzzleRules::InitializePrototype(const UGridLevelDataAsset& Level)
 		const FTileData* Tile = Tiles.Find(Position);
 		return Tile && Tile->TileType == ETileType::Memory && !Tile->bPrintTrigger;
 	};
-	switch (Prototype)
-	{
-	case EGridPrototype::None:
-		return true;
-	case EGridPrototype::TurnBridgeAndSwap:
-	case EGridPrototype::TurnBridge:
+	if (Prototype == EGridPrototype::TurnBridge || Prototype == EGridPrototype::TurnBridgeAndSwap ||
+		(Prototype == EGridPrototype::RecordRoute && !Level.InitialDeck.IsEmpty()))
 	{
 		if (Level.TurnControls.IsEmpty() || Level.InitialDeck.IsEmpty() ||
 			Level.InitialDeck.Num() != Level.AlternateDeck.Num()) { return false; }
@@ -229,9 +225,9 @@ bool FGridPuzzleRules::InitializePrototype(const UGridLevelDataAsset& Level)
 			AlternateDeck.Add(End);
 		}
 		TurnControls = Level.TurnControls;
-		break;
 	}
-	case EGridPrototype::RecordRoute:
+	if (Prototype == EGridPrototype::RecordRoute)
+	{
 		if (!Algo::AllOf(Level.ReplayTiles, IsMemory) || Level.ReplayTiles.Num() < RecordedLength ||
 			!Tiles.Contains(Level.RecordStart) || !Tiles.Contains(Level.ReplayStart)) { return false; }
 		ReplayTiles = Level.ReplayTiles;
@@ -241,10 +237,6 @@ bool FGridPuzzleRules::InitializePrototype(const UGridLevelDataAsset& Level)
 		if (RecordStart != ReplayStart) { Tiles.FindChecked(ReplayStart).InteractionLabel = TEXT("PLAY"); }
 		for (FIntPoint Position : ReplayTiles) { Tiles.FindChecked(Position).InteractionLabel = TEXT("PLAY"); }
 		return true;
-	case EGridPrototype::SwapPlaces:
-		break;
-	default:
-		return false;
 	}
 	if (Prototype == EGridPrototype::SwapPlaces || Prototype == EGridPrototype::TurnBridgeAndSwap)
 	{
