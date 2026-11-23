@@ -26,16 +26,28 @@ namespace
 	const FLinearColor Dim(.006f,.015f,.026f,.72f);
 	const FSlateColorBrush Fill(FLinearColor::White);
 
-	// 中文文本使用引擎自带的回退字体，英文强调文字复用默认粗体。
-	FSlateFontInfo Font(int32 Size, bool bLatin)
+	// Noto Sans / Source Han Serif 都是 OFL 字体，风格接近幻想 RPG 界面。
+	FSlateFontInfo Font(int32 Size, bool bBold = false)
 	{
-		if (bLatin) { return FCoreStyle::GetDefaultFontStyle("Bold", Size); }
-		return FSlateFontInfo(FPaths::EngineContentDir() / TEXT("Slate/Fonts/DroidSansFallback.ttf"), Size);
+		const TCHAR* File = bBold ? TEXT("OneStep/Fonts/NotoSansSC-Bold.otf") :
+			TEXT("OneStep/Fonts/MiSans-Regular.otf");
+		return FSlateFontInfo(FPaths::ProjectContentDir() / File, Size);
+	}
+
+	FSlateFontInfo DisplayFont(int32 Size)
+	{
+		return FSlateFontInfo(FPaths::ProjectContentDir() /
+			TEXT("OneStep/Fonts/NotoSerifSC-VF.ttf"), Size);
 	}
 
 	TSharedRef<STextBlock> Text(FText Label, int32 Size, FLinearColor Color = Ink, bool bLatin = false)
 	{
 		return SNew(STextBlock).Text(MoveTemp(Label)).Font(Font(Size,bLatin)).ColorAndOpacity(Color);
+	}
+
+	TSharedRef<STextBlock> DisplayText(FText Label, int32 Size, FLinearColor Color = Ink)
+	{
+		return SNew(STextBlock).Text(MoveTemp(Label)).Font(DisplayFont(Size)).ColorAndOpacity(Color);
 	}
 
 	TSharedRef<SBorder> Card(const TSharedRef<SWidget>& Content, FLinearColor Color = Panel, FMargin Padding = FMargin(22))
@@ -82,14 +94,14 @@ namespace
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,14)
 			[Text(LOCTEXT("Theme", "同行"), 16, Blue)]
 			+ SVerticalBox::Slot().AutoHeight()
-			[Text(LOCTEXT("Title", "借我一步"), 84)]
+			[DisplayText(LOCTEXT("Title", "借我一步"), 84)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(6,0,0,34)
 			[Text(LOCTEXT("Subtitle", "ONE STEP FOR YOU"), 17, Muted, true)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,32)
 			[Text(LOCTEXT("Intro", "你先走，我跟上。"), 20, Muted)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,22)
-			[Text(FText::Format(LOCTEXT("EchoProgress", "回响  {0} / {1}"),
-				FText::AsNumber(Manager.GetEarnedEchoCount()), FText::AsNumber(Manager.GetEchoTargetCount())),
+			[Text(FText::Format(LOCTEXT("AchievementProgress", "成就  {0} / {1}"),
+				FText::AsNumber(Manager.GetUnlockedAchievementCount()), FText::AsNumber(Manager.GetAchievementTargetCount())),
 				16, Orange)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
 			[
@@ -102,6 +114,8 @@ namespace
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
 			[Button(LOCTEXT("Select", "选关"), &Manager, &AGridManager::ShowSelection)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
+			[Button(LOCTEXT("Achievements", "成就"), &Manager, &AGridManager::ShowAchievements)]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
 			[Button(LOCTEXT("Controls", "怎么玩"), &Manager, &AGridManager::ShowControls)]
 			+ SVerticalBox::Slot().AutoHeight()
 			[Button(LOCTEXT("Exit", "退出游戏"), &Manager, &AGridManager::Exit)];
@@ -113,9 +127,11 @@ namespace
 		const TWeakObjectPtr<AGridManager> Weak(&Manager);
 		const auto MakeLevelButton = [&Manager, Weak](int32 Index)
 		{
-			const FText Label = Index >= Manager.GetCampaignLevelCount() ? Manager.GetLevelTitle(Index) :
+			const FText BaseLabel = Index >= Manager.GetCampaignLevelCount() ? Manager.GetLevelTitle(Index) :
 				FText::Format(LOCTEXT("LevelButton", "{0}  {1}"),
 				FText::AsNumber(Index + 1), Manager.GetLevelTitle(Index));
+			const FText Label = !Manager.CanSelectLevel(Index) && Index < Manager.GetCampaignLevelCount() ?
+				FText::Format(LOCTEXT("LockedLevelButton", "锁定 · {0}"), BaseLabel) : BaseLabel;
 			return ActionButton(Label, FOnClicked::CreateLambda([Weak, Index]()
 			{
 				if (AGridManager* Puzzle = Weak.Get()) { Puzzle->SelectLevel(Index); }
@@ -137,10 +153,10 @@ namespace
 
 		TSharedRef<SVerticalBox> Body = SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,16)
-			[Text(LOCTEXT("Select", "选关"), 38)]
+			[DisplayText(LOCTEXT("Select", "选关"), 38)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,14)
-			[Text(FText::Format(LOCTEXT("EchoSelection", "回响  {0} / {1}"),
-				FText::AsNumber(Manager.GetEarnedEchoCount()), FText::AsNumber(Manager.GetEchoTargetCount())),
+			[Text(FText::Format(LOCTEXT("AchievementSelection", "成就  {0} / {1}"),
+				FText::AsNumber(Manager.GetUnlockedAchievementCount()), FText::AsNumber(Manager.GetAchievementTargetCount())),
 				16, Orange)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
 			[Text(LOCTEXT("MainChapters", "章节"), 18, Blue)]
@@ -163,6 +179,57 @@ namespace
 		Body->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0,20,0,0)
 		[Button(LOCTEXT("MainMenu", "返回菜单"), &Manager, &AGridManager::ShowMenu)];
 		return Card(Body, Panel, FMargin(30,26));
+	}
+
+	TSharedRef<SWidget> Achievements(AGridManager& Manager)
+	{
+		TSharedRef<SUniformGridPanel> Grid = SNew(SUniformGridPanel)
+			.SlotPadding(FMargin(8))
+			.MinDesiredSlotWidth(420.f);
+		for (int32 Index = 0; Index < Manager.GetAchievementTargetCount(); ++Index)
+		{
+			const bool bUnlocked = Manager.IsAchievementUnlocked(Index);
+			const bool bAllClear = Index == Manager.GetMainLevelCount();
+			Grid->AddSlot(Index % 2, Index / 2)
+			[
+				SNew(SBorder)
+				.BorderImage(&Fill)
+				.BorderBackgroundColor(bUnlocked ?
+					FLinearColor(.075f,.18f,.21f,.98f) : FLinearColor(.020f,.050f,.070f,.96f))
+				.Padding(FMargin(18,14))
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,14,0)
+					[Text(bUnlocked ? LOCTEXT("UnlockedMark", "◆") : LOCTEXT("LockedMark", "◇"),
+						24, bUnlocked ? Orange : Muted)]
+					+ SHorizontalBox::Slot().VAlign(VAlign_Center)
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot().AutoHeight()
+						[Text(bUnlocked ? Manager.GetAchievementName(Index) :
+							(bAllClear ? Manager.GetAchievementName(Index) : LOCTEXT("HiddenAchievement", "未发现回响")),
+							20, bUnlocked ? Ink : Muted, bUnlocked)]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0,5,0,0)
+						[Text(Manager.GetAchievementDescription(Index), 15, Muted)]
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).HAlign(HAlign_Right)
+					[Text(bUnlocked ? LOCTEXT("Unlocked", "已解锁") : LOCTEXT("Locked", "未解锁"),
+						15, bUnlocked ? Orange : Muted)]
+				]
+			];
+		}
+
+		return Card(SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
+			[DisplayText(LOCTEXT("AchievementTitle", "成就与回响"), 38)]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,18)
+			[Text(FText::Format(LOCTEXT("AchievementSummary", "已解锁 {0} / {1}"),
+				FText::AsNumber(Manager.GetUnlockedAchievementCount()),
+				FText::AsNumber(Manager.GetAchievementTargetCount())), 18, Orange)]
+			+ SVerticalBox::Slot().AutoHeight()[Grid]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0,20,0,0)
+			[Button(LOCTEXT("BackToMenu", "返回菜单"), &Manager, &AGridManager::ShowMenu, true)],
+			Panel, FMargin(30,26));
 	}
 
 	// 绑定动态属性读取当前角色状态，切换人物时可直接刷新文本和背景。
@@ -263,7 +330,7 @@ namespace
 		TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
 		auto Heading = [&Body](FText Label)
 		{
-			Body->AddSlot().AutoHeight().Padding(0,0,0,20)[Text(MoveTemp(Label), 38)];
+			Body->AddSlot().AutoHeight().Padding(0,0,0,20)[DisplayText(MoveTemp(Label), 38)];
 		};
 		auto Row = [&Body](FText Label, FText Detail)
 		{
@@ -286,7 +353,7 @@ namespace
 			Heading(LOCTEXT("NewMechanic", "先看一下"));
 			Body->AddSlot().AutoHeight().Padding(0,0,0,10)
 			[
-				SNew(STextBlock).Font(Font(30,false)).ColorAndOpacity(Blue)
+				SNew(STextBlock).Font(DisplayFont(30)).ColorAndOpacity(Blue)
 				.Text(Manager.GetMechanicIntroTitle())
 			];
 			Body->AddSlot().AutoHeight().Padding(0,0,0,16)
@@ -350,8 +417,13 @@ namespace
 				Body->AddSlot().AutoHeight().Padding(0,0,0,17)
 				[
 					Text(FText::Format(LOCTEXT("EchoFound", "找到回响：{0}"),
-						Manager.GetLevelEchoName(Manager.GetSourceLevelIndex())), 17, Orange)
+						Manager.GetLevelEchoName(Manager.GetLevelNumber() - 1)), 17, Orange)
 				];
+			}
+			if (Manager.IsAllClearAchievementUnlocked())
+			{
+				Body->AddSlot().AutoHeight().Padding(0,0,0,17)
+				[Text(LOCTEXT("AllClearAchievement", "成就解锁：并肩至终"), 17, Orange)];
 			}
 			if (Manager.IsFinalLevel())
 			{
@@ -388,6 +460,11 @@ TSharedRef<SWidget> MakeGridPuzzleScreen(AGridManager& Manager)
 	{
 		Frame->AddSlot()[SNew(SBorder).BorderImage(&Fill).BorderBackgroundColor(Dim)];
 		Layout->AddSlot().HAlign(HAlign_Center).VAlign(VAlign_Center)[LevelSelection(Manager)];
+	}
+	else if (Screen == EGridScreen::Achievements)
+	{
+		Frame->AddSlot()[SNew(SBorder).BorderImage(&Fill).BorderBackgroundColor(Dim)];
+		Layout->AddSlot().HAlign(HAlign_Center).VAlign(VAlign_Center)[Achievements(Manager)];
 	}
 	else if (Screen == EGridScreen::Ending)
 	{

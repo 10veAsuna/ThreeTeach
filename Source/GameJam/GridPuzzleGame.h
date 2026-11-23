@@ -16,7 +16,7 @@ class SWidget;
 class UGridMusicComponent;
 
 // 菜单、引导、游玩、暂停、结算与结局共用一个界面状态，由 SetScreen 统一切换。
-enum class EGridScreen : uint8 { Menu, Selection, Controls, MechanicIntro, Playing, Paused, Transition, Complete, Ending };
+enum class EGridScreen : uint8 { Menu, Selection, Achievements, Controls, MechanicIntro, Playing, Paused, Transition, Complete, Ending };
 
 // 蓝图可绑定这些事件，在 C++ 完成规则结算后追加音效、特效或其他表现。
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FGridTileEvent, FTileData, Tile);
@@ -31,6 +31,7 @@ class GAMEJAM_API UGridPuzzleProgress : public USaveGame
 
 public:
 	UPROPERTY() int32 CompletedMainLevels = 0;
+	UPROPERTY() TArray<int32> CompletedLevels;
 	UPROPERTY() TArray<int32> EarnedEchoes;
 	UPROPERTY() TArray<int32> SeenMechanicIntros;
 };
@@ -50,6 +51,7 @@ public:
 	void ShowControls();
 	void ShowMenu();
 	void ShowSelection();
+	void ShowAchievements();
 	void DismissMechanicIntro();
 	void SelectLevel(int32 Index);
 	void Advance();
@@ -92,8 +94,8 @@ public:
 	int32 GetLevelCount() const { return Levels.Num(); }
 	int32 GetCampaignLevelCount() const { return CampaignLevelCount; }
 	int32 GetMainLevelCount() const { return MainLevelCount; }
-	int32 GetResumeIndex() const { return FMath::Min(CompletedMainLevels, FMath::Max(0, MainLevelCount - 1)); }
-	bool HasProgress() const { return CompletedMainLevels > 0; }
+	int32 GetResumeIndex() const;
+	bool HasProgress() const { return !CompletedLevels.IsEmpty(); }
 	bool CanSelectLevel(int32 Index) const;
 	bool IsChallenge() const { return LevelIndex >= MainLevelCount && !IsPrototype(); }
 	bool IsPrototype() const { return LevelIndex >= CampaignLevelCount; }
@@ -114,9 +116,16 @@ public:
 	FText GetFeedback() const { return Feedback; }
 	FText GetRecordingStatus() const;
 	bool GetEndingReady() const { return bEndingReady; }
-	bool HasCurrentLevelEcho() const { return EarnedEchoes.Contains(GetSourceLevelIndex()); }
+	bool HasCurrentLevelEcho() const { return EarnedEchoes.Contains(LevelIndex); }
 	int32 GetEarnedEchoCount() const;
 	int32 GetEchoTargetCount() const;
+	int32 GetAchievementTargetCount() const { return MainLevelCount + 1; }
+	int32 GetUnlockedAchievementCount() const;
+	bool IsAchievementUnlocked(int32 AchievementIndex) const;
+	bool IsAllClearAchievementUnlocked() const;
+	FText GetAchievementName(int32 AchievementIndex) const;
+	FText GetAchievementDescription(int32 AchievementIndex) const;
+	bool IsLevelCompleted(int32 Level) const { return CompletedLevels.Contains(Level); }
 	static bool GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosition);
 	static bool LevelHasMechanicIntro(int32 LevelIndex);
 	FText GetLevelEchoName(int32 Index) const;
@@ -196,6 +205,7 @@ private:
 	int32 CampaignLevelCount = 0;
 	int32 ReplayIndex = 0;
 	int32 CompletedMainLevels = 0;
+	TSet<int32> CompletedLevels;
 	TSet<int32> EarnedEchoes;
 	TSet<int32> SeenMechanicIntros;
 	// 动画结束前暂缓下一次移动，避免视觉位置与已经结算的网格位置错开。

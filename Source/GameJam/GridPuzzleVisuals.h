@@ -9,6 +9,7 @@ class USceneComponent;
 class UStaticMeshComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
+class UPointLightComponent;
 class UTextRenderComponent;
 
 enum class EGridShape : uint8 { Cube, Cylinder, Cone, Sphere };
@@ -71,6 +72,9 @@ private:
 	UPROPERTY() TObjectPtr<UTextRenderComponent> ActionMarker;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoMarker;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoHalo;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoBeam;
+	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> EchoShards;
+	UPROPERTY() TObjectPtr<UPointLightComponent> EchoLight;
 	// 两种颜色的脚印组件预先创建，刷新时按归属切换可见性。
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> BluePrints;
 	UPROPERTY() TArray<TObjectPtr<UStaticMeshComponent>> OrangePrints;

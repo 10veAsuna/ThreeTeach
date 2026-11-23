@@ -1,8 +1,10 @@
 #include "GridPuzzleVisuals.h"
 
 #include "Components/SceneComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Engine/Font.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -26,6 +28,9 @@ namespace
 		Label->SetWorldSize(Size);
 		Label->SetTextRenderColor(FColor(218, 244, 244));
 		Label->SetText(FText::FromString(Text));
+		static UFont* WorldLabelFont = LoadObject<UFont>(nullptr,
+			TEXT("/Game/OneStep/Fonts/NotoSansSC-Bold.NotoSansSC-Bold"));
+		if (WorldLabelFont) { Label->SetFont(WorldLabelFont); }
 		Label->RegisterComponent();
 		return Label;
 	}
@@ -265,14 +270,33 @@ void AGridTile::SetEchoAvailable(bool bAvailable, UMaterialInterface* Material)
 	bEchoAvailable = bAvailable;
 	if (bAvailable && !EchoMarker)
 	{
-		const FLinearColor EchoGold(.95f,.80f,.42f);
+		const FLinearColor EchoGold(.92f,.58f,.16f);
+		EchoBeam = GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cylinder,
+			FVector(0,0,37), FVector(.022f,.022f,.58f), EchoGold, 2.2f);
 		EchoHalo = GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cylinder,
-			FVector(0,0,48), FVector(.17f,.17f,.012f), EchoGold, 1.4f);
+			FVector(0,0,16), FVector(.38f,.38f,.016f), EchoGold, 1.8f);
 		EchoMarker = GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
-			FVector(0,0,61), FVector(.095f,.095f,.095f), EchoGold, 3.2f, FRotator(0,45,45));
+			FVector(0,0,77), FVector(.14f,.14f,.14f), EchoGold, 2.6f, FRotator(0,45,45));
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			EchoShards.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
+				FVector(27.f,0,61), FVector(.055f,.055f,.12f), EchoGold, 2.2f,
+				FRotator(180,Index * 120.f,0)));
+		}
+		EchoLight = NewObject<UPointLightComponent>(this, TEXT("EchoLight"));
+		EchoLight->SetupAttachment(RootComponent);
+		EchoLight->SetRelativeLocation(FVector(0,0,58));
+		EchoLight->SetMobility(EComponentMobility::Movable);
+		EchoLight->SetLightColor(EchoGold);
+		EchoLight->SetAttenuationRadius(220.f);
+		EchoLight->SetCastShadows(false);
+		EchoLight->RegisterComponent();
 	}
+	if (EchoBeam) { EchoBeam->SetVisibility(bAvailable); }
 	if (EchoHalo) { EchoHalo->SetVisibility(bAvailable); }
 	if (EchoMarker) { EchoMarker->SetVisibility(bAvailable); }
+	for (UStaticMeshComponent* Shard : EchoShards) { Shard->SetVisibility(bAvailable); }
+	if (EchoLight) { EchoLight->SetVisibility(bAvailable); }
 	EchoTime = 0.f;
 	if (bAvailable) { SetActorTickEnabled(true); }
 }
@@ -508,15 +532,30 @@ void AGridTile::Tick(float DeltaSeconds)
 		const bool bFlash = FMath::Fmod(GetWorld()->GetTimeSeconds(), .65f) < .36f;
 		GridVisuals::Paint(Countdown[0], bFlash ? FLinearColor(1.f,.64f,.28f) : DarkSeam, bFlash ? 1.7f : .1f);
 	}
-	if (bEchoAvailable && EchoMarker && EchoHalo)
+	if (bEchoAvailable && EchoMarker && EchoHalo && EchoBeam)
 	{
 		EchoTime += DeltaSeconds;
-		const float Bob = FMath::Sin(EchoTime * 3.6f) * 4.f;
-		EchoMarker->SetRelativeLocation(FVector(0,0,61.f + Bob));
-		EchoMarker->SetRelativeRotation(FRotator(0,EchoTime * 72.f,45.f));
-		const float Pulse = .65f + .35f * (0.5f + 0.5f * FMath::Sin(EchoTime * 5.f));
-		GridVisuals::Paint(EchoMarker, FLinearColor(.95f,.80f,.42f), 2.f + Pulse * 2.f);
-		GridVisuals::Paint(EchoHalo, FLinearColor(.95f,.80f,.42f), .7f + Pulse);
+		const float Bob = FMath::Sin(EchoTime * 4.f) * 6.f;
+		const float Pulse = .65f + .35f * (0.5f + 0.5f * FMath::Sin(EchoTime * 5.5f));
+		const FLinearColor EchoGold(.92f,.58f,.16f);
+		EchoMarker->SetRelativeLocation(FVector(0,0,77.f + Bob));
+		EchoMarker->SetRelativeRotation(FRotator(EchoTime * 35.f,EchoTime * 92.f,45.f));
+		EchoMarker->SetRelativeScale3D(FVector(.135f + Pulse * .035f));
+		EchoHalo->SetRelativeScale3D(FVector(.36f + Pulse * .10f,.36f + Pulse * .10f,.016f));
+		EchoBeam->SetRelativeScale3D(FVector(.020f,.020f,.52f + Pulse * .14f));
+		for (int32 Index = 0; Index < EchoShards.Num(); ++Index)
+		{
+			const float Angle = FMath::DegreesToRadians(EchoTime * 58.f + Index * 120.f);
+			EchoShards[Index]->SetRelativeLocation(FVector(
+				FMath::Cos(Angle) * 27.f, FMath::Sin(Angle) * 27.f,
+				62.f + FMath::Sin(EchoTime * 4.6f + Index * 2.1f) * 5.f));
+			EchoShards[Index]->SetRelativeRotation(FRotator(180, FMath::RadiansToDegrees(Angle), 0));
+		}
+		GridVisuals::Paint(EchoMarker, EchoGold, 1.4f + Pulse * 1.5f);
+		GridVisuals::Paint(EchoHalo, EchoGold, .9f + Pulse * 1.1f);
+		GridVisuals::Paint(EchoBeam, EchoGold, .55f + Pulse * .9f);
+		for (UStaticMeshComponent* Shard : EchoShards) { GridVisuals::Paint(Shard, EchoGold, 1.2f + Pulse * 1.2f); }
+		if (EchoLight) { EchoLight->SetIntensity(650.f + Pulse * 650.f); }
 	}
 	// 转动、闪烁、寄印等待和回响动画结束后关闭 Tick，减少静止格子的逐帧开销。
 	SetActorTickEnabled(DeckDuration > 0.f || bLastStep || TileData.bPrintPending ||

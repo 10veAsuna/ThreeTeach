@@ -662,34 +662,27 @@ bool FGridPrintTimingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// 搜索六个回响的可达性，同时核对首次机关引导出现在哪些关卡。
+// 搜索五张主线的回响可达性，并确认每张主线都有机制导览。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridEchoPickupTest, "OneStep.Rules.EchoPickups",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FGridEchoPickupTest::RunTest(const FString& Parameters)
 {
-	const TArray<UGridLevelDataAsset*> Levels = AGridManager::CreateDefaultLevels();
+	const TArray<UGridLevelDataAsset*> Levels = AGridManager::CreateCampaignLevels();
 	int32 PickupCount = 0;
 	for (int32 Index = 0; Index < Levels.Num(); ++Index)
 	{
 		FIntPoint Pickup;
 		if (!AGridManager::GetEchoLocationForLevel(Index, Pickup)) { continue; }
 		++PickupCount;
-		TestTrue(FString::Printf(TEXT("Echo pickup in chapter %d is reachable"), Index + 1),
+		TestTrue(FString::Printf(TEXT("Echo pickup on board %d is reachable"), Index + 1),
 			FGridTestSearch::CanVisit(*Levels[Index], Pickup));
+		TestTrue(FString::Printf(TEXT("Board %d has a mechanic introduction"), Index + 1),
+			AGridManager::LevelHasMechanicIntro(Index));
 	}
-	TestEqual(TEXT("Only selected chapters contain echo pickups"), PickupCount, 6);
-	FIntPoint Missing;
-	TestFalse(TEXT("Chapter 2 is not a new-mechanic chapter and has no echo pickup"),
-		AGridManager::GetEchoLocationForLevel(1, Missing));
-	TestFalse(TEXT("Chapter 2 does not show a new-mechanic popup for its side pocket route"),
-		AGridManager::LevelHasMechanicIntro(1));
-	TestFalse(TEXT("Chapter 4 does not treat route planning as a new mechanism"),
-		AGridManager::LevelHasMechanicIntro(3));
-	TestFalse(TEXT("Chapter 10 does not show a popup for a new use of an existing imprint"),
-		AGridManager::LevelHasMechanicIntro(9));
-	TestTrue(TEXT("Chapter 3 introduces switches and locked goals"),
-		AGridManager::LevelHasMechanicIntro(2));
+	TestEqual(TEXT("Every campaign board contains one echo pickup"), PickupCount, 5);
+	TestFalse(TEXT("Mechanic previews do not show a campaign introduction"),
+		AGridManager::LevelHasMechanicIntro(5));
 	return true;
 }
 
@@ -866,12 +859,31 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	Manager->bPlayMusic = false;
 	Manager->Levels.Append(AGridManager::CreateDefaultLevels());
 	Manager->Initialize(*Controller);
+	Manager->CompletedLevels.Reset();
+	TestTrue(TEXT("First campaign level is initially unlocked"), Manager->CanSelectLevel(0));
+	TestFalse(TEXT("Second campaign level is locked before the first is completed"),
+		Manager->CanSelectLevel(1));
+	TestTrue(TEXT("Mechanic previews remain directly accessible"),
+		Manager->CanSelectLevel(Manager->GetCampaignLevelCount()));
+	Manager->CompletedLevels.Add(0);
+	TestTrue(TEXT("Completing a level unlocks exactly the next campaign level"),
+		Manager->CanSelectLevel(1));
+	TestFalse(TEXT("Completing one level does not unlock later campaign levels"),
+		Manager->CanSelectLevel(2));
 	// 回响与引导预先标记已完成，测试过程只操作关内状态。
-	for (int32 Index = 0; Index < 14; ++Index)
+	Manager->EarnedEchoes.Reset();
+	Manager->SeenMechanicIntros.Reset();
+	for (int32 Index = 0; Index < Manager->GetMainLevelCount(); ++Index)
 	{
 		Manager->EarnedEchoes.Add(Index);
 		Manager->SeenMechanicIntros.Add(Index);
 	}
+	for (int32 Index = 0; Index < Manager->GetMainLevelCount(); ++Index)
+	{
+		Manager->CompletedLevels.Add(Index);
+	}
+	TestTrue(TEXT("Completing every campaign level unlocks the all-clear achievement"),
+		Manager->IsAllClearAchievementUnlocked());
 	Manager->LoadLevel(0);
 	Manager->SetScreen(EGridScreen::Playing);
 	World->GetTimerManager().Tick(0.f);

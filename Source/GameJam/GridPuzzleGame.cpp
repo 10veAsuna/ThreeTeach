@@ -34,7 +34,7 @@ namespace
 	constexpr float RejectTime = .14f;
 	constexpr float DeckTime = .46f;
 	constexpr float SwapTime = .35f;
-	const TCHAR* ProgressSlot = TEXT("OneStep_Progress_V6");
+	const TCHAR* ProgressSlot = TEXT("OneStep_Progress_V7");
 	const EPlayerRole Roles[] = { EPlayerRole::PlayerA, EPlayerRole::PlayerB };
 
 	const TCHAR* RoleLetter(EPlayerRole Role)
@@ -120,7 +120,10 @@ void AGridManager::Initialize(APlayerController& Controller)
 	Levels.Append(CreatePrototypeLevels());
 	// 存档只恢复进度与收集项，关内位置和撤销历史从关卡初始状态重建。
 	const bool bLegacyProgress = !UGameplayStatics::DoesSaveGameExist(ProgressSlot, 0);
-	const TCHAR* LoadSlot = bLegacyProgress ? TEXT("OneStep_Progress_V4") : ProgressSlot;
+	const TCHAR* LoadSlot = bLegacyProgress ?
+		(UGameplayStatics::DoesSaveGameExist(TEXT("OneStep_Progress_V6"), 0) ?
+			TEXT("OneStep_Progress_V6") : TEXT("OneStep_Progress_V4")) :
+		ProgressSlot;
 	if (UGameplayStatics::DoesSaveGameExist(LoadSlot, 0))
 	{
 		if (const UGridPuzzleProgress* Saved = Cast<UGridPuzzleProgress>(UGameplayStatics::LoadGameFromSlot(LoadSlot, 0)))
@@ -135,13 +138,27 @@ void AGridManager::Initialize(APlayerController& Controller)
 					++CompletedMainLevels;
 				}
 			}
+			for (const int32 Level : Saved->CompletedLevels)
+			{
+				if (Level >= 0 && Level < CampaignLevelCount) { CompletedLevels.Add(Level); }
+			}
+			if (CompletedLevels.IsEmpty())
+			{
+				for (int32 Level = 0; Level < FMath::Min(CompletedMainLevels, CampaignLevelCount); ++Level)
+				{
+					CompletedLevels.Add(Level);
+				}
+			}
 			for (const int32 Echo : Saved->EarnedEchoes)
 			{
-				if (Echo >= 0 && Echo < 14) { EarnedEchoes.Add(Echo); }
+				if (!bLegacyProgress && Echo >= 0 && Echo < MainLevelCount) { EarnedEchoes.Add(Echo); }
 			}
-			for (const int32 Intro : Saved->SeenMechanicIntros)
+			if (!bLegacyProgress)
 			{
-				if (Intro >= 0 && Intro < 14) { SeenMechanicIntros.Add(Intro); }
+				for (const int32 Intro : Saved->SeenMechanicIntros)
+				{
+					if (Intro >= 0 && Intro < MainLevelCount) { SeenMechanicIntros.Add(Intro); }
+				}
 			}
 		}
 	}
@@ -264,8 +281,8 @@ bool AGridManager::LoadLevel(int32 Index, int32 Section, bool bContinueChapter)
 	Feedback = FText::GetEmpty();
 	UnlockInputAt = 0.f;
 	bEndingReady = false;
-	bMechanicIntroPending = Index < CampaignLevelCount && LevelHasMechanicIntro(GetSourceLevelIndex()) &&
-		!SeenMechanicIntros.Contains(GetSourceLevelIndex());
+	bMechanicIntroPending = Index < CampaignLevelCount && LevelHasMechanicIntro(Index) &&
+		!SeenMechanicIntros.Contains(Index);
 
 	// 规则给出每个格子的坐标与类型，地块 Setup 负责创建模型和标记。
 	for (const auto& Pair : Rules.GetTiles())
@@ -297,7 +314,7 @@ bool AGridManager::LoadLevel(int32 Index, int32 Section, bool bContinueChapter)
 		}
 	}
 	FIntPoint EchoPosition;
-	if (GetEchoLocationForLevel(GetSourceLevelIndex(), EchoPosition) && !EarnedEchoes.Contains(GetSourceLevelIndex()))
+	if (GetEchoLocationForLevel(LevelIndex, EchoPosition) && !EarnedEchoes.Contains(LevelIndex))
 	{
 		if (AGridTile* EchoTile = TileActors.FindRef(EchoPosition))
 		{
@@ -404,21 +421,40 @@ void AGridManager::ShowSelection()
 	SetScreen(EGridScreen::Selection);
 }
 
+void AGridManager::ShowAchievements()
+{
+	SetScreen(EGridScreen::Achievements);
+}
+
 // 引导已读状态立即持久化，之后重进该关可以直接开始游玩。
 void AGridManager::DismissMechanicIntro()
 {
 	if (Screen != EGridScreen::MechanicIntro) { return; }
-	SeenMechanicIntros.Add(GetSourceLevelIndex());
+	SeenMechanicIntros.Add(LevelIndex);
 	bMechanicIntroPending = false;
 	PersistProgress();
 	SetScreen(EGridScreen::Playing);
 }
 
-// 主线逐关解锁，挑战要求完成主线，玩法试玩可直接进入。
+int32 AGridManager::GetResumeIndex() const
+{
+	int32 Unlocked = 0;
+	while (Unlocked < MainLevelCount && CompletedLevels.Contains(Unlocked)) { ++Unlocked; }
+	return FMath::Clamp(Unlocked, 0, FMath::Max(0, MainLevelCount - 1));
+}
+
+// 主线逐关解锁；主菜单里的机关教学不参与进度锁。
 bool AGridManager::CanSelectLevel(int32 Index) const
 {
-	return Levels.IsValidIndex(Index) && (Index >= CampaignLevelCount ||
-		(Index < MainLevelCount ? Index <= CompletedMainLevels : AreChallengesUnlocked()));
+	if (!Levels.IsValidIndex(Index)) { return false; }
+	if (Index >= CampaignLevelCount) { return true; }
+	if (Index < MainLevelCount) { return Index <= GetResumeIndex(); }
+	if (!AreChallengesUnlocked()) { return false; }
+	for (int32 Previous = MainLevelCount; Previous < Index; ++Previous)
+	{
+		if (!CompletedLevels.Contains(Previous)) { return false; }
+	}
+	return true;
 }
 
 void AGridManager::SelectLevel(int32 Index)
@@ -447,10 +483,15 @@ void AGridManager::Advance()
 	if (LoadLevel(LevelIndex+1)) { SetScreen(EGridScreen::Playing); }
 }
 
-// 主线通关只提升完成进度，重复游玩旧关不会回退解锁状态。
+// 完成任意正式关卡都会记录；主线解锁只跟随连续完成的进度。
 void AGridManager::SaveLevelProgress()
 {
 	bool bChanged = false;
+	if (!IsPrototype() && LevelIndex < CampaignLevelCount)
+	{
+		bChanged |= !CompletedLevels.Contains(LevelIndex);
+		CompletedLevels.Add(LevelIndex);
+	}
 	if (!IsChallenge() && !IsPrototype() && GetLevelNumber() > CompletedMainLevels)
 	{
 		CompletedMainLevels = GetLevelNumber();
@@ -465,6 +506,7 @@ void AGridManager::PersistProgress()
 	UGridPuzzleProgress* Save = CastChecked<UGridPuzzleProgress>(
 		UGameplayStatics::CreateSaveGameObject(UGridPuzzleProgress::StaticClass()));
 	Save->CompletedMainLevels = CompletedMainLevels;
+	Save->CompletedLevels = CompletedLevels.Array();
 	Save->EarnedEchoes = EarnedEchoes.Array();
 	Save->SeenMechanicIntros = SeenMechanicIntros.Array();
 	if (!UGameplayStatics::SaveGameToSlot(Save, ProgressSlot, 0))
@@ -477,17 +519,17 @@ void AGridManager::PersistProgress()
 bool AGridManager::TryCollectEchoAt(FIntPoint Position)
 {
 	FIntPoint EchoPosition;
-	if (!GetEchoLocationForLevel(GetSourceLevelIndex(), EchoPosition) || EchoPosition != Position ||
-		GetLevelEchoName(GetSourceLevelIndex()).IsEmpty() || EarnedEchoes.Contains(GetSourceLevelIndex()))
+	if (!GetEchoLocationForLevel(LevelIndex, EchoPosition) || EchoPosition != Position ||
+		GetLevelEchoName(LevelIndex).IsEmpty() || EarnedEchoes.Contains(LevelIndex))
 	{
 		return false;
 	}
-	EarnedEchoes.Add(GetSourceLevelIndex());
+	EarnedEchoes.Add(LevelIndex);
 	if (AGridTile* EchoTile = TileActors.FindRef(Position))
 	{
 		EchoTile->SetEchoAvailable(false, PaletteMaterial);
 	}
-	SetFeedback(FText::Format(LOCTEXT("EchoCollected", "找到回响：{0}"), GetLevelEchoName(GetSourceLevelIndex())));
+	SetFeedback(FText::Format(LOCTEXT("EchoCollected", "找到回响：{0}"), GetLevelEchoName(LevelIndex)));
 	PersistProgress();
 	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
 	return true;
@@ -510,6 +552,7 @@ void AGridManager::TogglePause()
 	case EGridScreen::Paused: SetScreen(EGridScreen::Playing); break;
 	case EGridScreen::Controls: SetScreen(bControlsFromPause ? EGridScreen::Paused : EGridScreen::Menu); break;
 	case EGridScreen::Selection: ShowMenu(); break;
+	case EGridScreen::Achievements: ShowMenu(); break;
 	default: break;
 	}
 }
@@ -743,24 +786,62 @@ FText AGridManager::GetLevelHint() const
 int32 AGridManager::GetEarnedEchoCount() const
 {
 	int32 Count = 0;
-	FIntPoint Position;
-	for (int32 Index = 0; Index < CampaignLevelCount; ++Index)
+	for (int32 Index = 0; Index < MainLevelCount; ++Index)
 	{
-		const int32 Key = Levels[Index]->LegacyChapterIndex;
-		Count += GetEchoLocationForLevel(Key, Position) && EarnedEchoes.Contains(Key);
+		Count += EarnedEchoes.Contains(Index);
 	}
 	return Count;
 }
 
 int32 AGridManager::GetEchoTargetCount() const
 {
-	int32 Count = 0;
-	FIntPoint Position;
-	for (int32 Index = 0; Index < CampaignLevelCount; ++Index)
+	return MainLevelCount;
+}
+
+int32 AGridManager::GetUnlockedAchievementCount() const
+{
+	return GetEarnedEchoCount() + (IsAllClearAchievementUnlocked() ? 1 : 0);
+}
+
+bool AGridManager::IsAchievementUnlocked(int32 AchievementIndex) const
+{
+	if (AchievementIndex >= 0 && AchievementIndex < MainLevelCount) { return EarnedEchoes.Contains(AchievementIndex); }
+	return AchievementIndex == MainLevelCount && IsAllClearAchievementUnlocked();
+}
+
+bool AGridManager::IsAllClearAchievementUnlocked() const
+{
+	if (MainLevelCount <= 0) { return false; }
+	for (int32 Index = 0; Index < MainLevelCount; ++Index)
 	{
-		Count += GetEchoLocationForLevel(Levels[Index]->LegacyChapterIndex, Position);
+		if (!CompletedLevels.Contains(Index)) { return false; }
 	}
-	return Count;
+	return true;
+}
+
+FText AGridManager::GetAchievementName(int32 AchievementIndex) const
+{
+	switch (AchievementIndex)
+	{
+	case 0: return LOCTEXT("Achievement01", "初见 · 回响");
+	case 1: return LOCTEXT("Achievement02", "薄冰 · 回响");
+	case 2: return LOCTEXT("Achievement03", "来信 · 回响");
+	case 3: return LOCTEXT("Achievement04", "回声 · 回响");
+	case 4: return LOCTEXT("Achievement05", "同行 · 回响");
+	case 5: return LOCTEXT("AchievementAll", "并肩至终");
+	default: return FText::GetEmpty();
+	}
+}
+
+FText AGridManager::GetAchievementDescription(int32 AchievementIndex) const
+{
+	if (AchievementIndex >= 0 && AchievementIndex < MainLevelCount)
+	{
+		return FText::Format(LOCTEXT("AchievementLevelDescription",
+			"在「{0}」中找到隐藏回响。"), GetLevelTitle(AchievementIndex));
+	}
+	return AchievementIndex == MainLevelCount ?
+		LOCTEXT("AchievementAllDescription", "完成全部主线关卡。") : FText::GetEmpty();
 }
 
 // 回响位置按从 0 开始的关卡索引配置，自动化测试会搜索其可达性。
@@ -768,36 +849,19 @@ bool AGridManager::GetEchoLocationForLevel(int32 LevelIndex, FIntPoint& OutPosit
 {
 	switch (LevelIndex)
 	{
-	case 0: OutPosition = {2, 2}; return true;
-	case 4: OutPosition = {2, 2}; return true;
-	case 6: OutPosition = {4, 4}; return true;
-	case 9: OutPosition = {4, 3}; return true;
-	case 12: OutPosition = {5, 1}; return true;
-	case 13: OutPosition = {7, 4}; return true;
+	case 0: OutPosition = {4, 1}; return true;
+	case 1: OutPosition = {2, 2}; return true;
+	case 2: OutPosition = {8, 7}; return true;
+	case 3: OutPosition = {8, 3}; return true;
+	case 4: OutPosition = {4, 6}; return true;
 	default: return false;
 	}
 }
 
-// 只在首次引入机关的指定关卡显示说明，复用已有规则的关卡直接开始。
+// 每张主线棋盘都会引入新的组合机关，首次进入时先暂停讲解。
 bool AGridManager::LevelHasMechanicIntro(int32 LevelIndex)
 {
-	switch (LevelIndex)
-	{
-	case 0:
-	case 2:
-	case 4:
-	case 5:
-	case 6:
-	case 7:
-	case 8:
-	case 10:
-	case 11:
-	case 12:
-	case 13:
-		return true;
-	default:
-		return false;
-	}
+	return LevelIndex >= 0 && LevelIndex < 5;
 }
 
 FText AGridManager::GetLevelEchoName(int32 Index) const
@@ -805,61 +869,52 @@ FText AGridManager::GetLevelEchoName(int32 Index) const
 	switch (Index)
 	{
 	case 0: return LOCTEXT("Echo01", "初见");
-	case 4: return LOCTEXT("Echo05", "薄冰");
-	case 6: return LOCTEXT("Echo07", "来信");
-	case 9: return LOCTEXT("Echo10", "岔路");
-	case 12: return LOCTEXT("Echo13", "旧脚印");
-	case 13: return LOCTEXT("Echo14", "晚到的信");
+	case 1: return LOCTEXT("Echo02", "薄冰");
+	case 2: return LOCTEXT("Echo03", "来信");
+	case 3: return LOCTEXT("Echo04", "回声");
+	case 4: return LOCTEXT("Echo05", "同行余音");
 	default: return FText::GetEmpty();
 	}
 }
 
 FText AGridManager::GetMechanicIntroTitle() const
 {
-	switch (GetSourceLevelIndex())
+	switch (LevelIndex)
 	{
-	case 0: return LOCTEXT("IntroTitle01", "踩对方的脚印");
-	case 2: return LOCTEXT("IntroTitle03", "开关和出口");
-	case 4: return LOCTEXT("IntroTitle05", "会碎的石板");
-	case 5: return LOCTEXT("IntroTitle06", "转桥");
-	case 6: return LOCTEXT("IntroTitle07", "传送脚印");
-	case 7: return LOCTEXT("IntroTitle08", "录制和回放");
-	case 8: return LOCTEXT("IntroTitle09", "只能走一次");
-	case 10: return LOCTEXT("IntroTitle11", "留一份脚印");
-	case 11: return LOCTEXT("IntroTitle12", "换位置，再转桥");
-	case 12: return LOCTEXT("IntroTitle13", "找回旧脚印");
-	case 13: return LOCTEXT("IntroTitle14", "晚几步送到");
+	case 0: return LOCTEXT("IntroTitle01", "借印、让路与锁门");
+	case 1: return LOCTEXT("IntroTitle02", "冰面、薄冰与寄印");
+	case 2: return LOCTEXT("IntroTitle03", "推箱、节拍与回信");
+	case 3: return LOCTEXT("IntroTitle04", "录步与转桥");
+	case 4: return LOCTEXT("IntroTitle05", "巡逻、存印与延时");
 	default: return FText::GetEmpty();
 	}
 }
 
-// 引导文案与运行中的规则对应，显示由 SetScreen 和已读存档共同控制。
 FText AGridManager::GetMechanicIntroBody() const
 {
-	switch (GetSourceLevelIndex())
+	switch (LevelIndex)
 	{
 	case 0:
-		return LOCTEXT("IntroBody01", "A 只能踩橙色脚印，B 只能踩蓝色脚印。走过以后，这格就变成自己的颜色，留给另一个人走。\n按 Tab 换人。换人不算步数。");
+		return LOCTEXT("IntroBody01",
+			"A 只能踩橙印，B 只能踩蓝印；踩过以后，这格会变成自己的颜色。两人不能站在同一格，窄路需要用旁边的空位错身。\n"
+			"标着 A/B 的锁门需要同色开关先被踩亮。按 Tab 换人，换人不计步。");
+	case 1:
+		return LOCTEXT("IntroBody02",
+			"ICE 会让角色沿同一方向连续滑行，直到前方没有可借的脚印。薄冰上的短条是寿命：人离开后，它按成功行动倒数，站上去的人会重新补满。\n"
+			"OUT 会沿连线把来源脚印的颜色送到 IN。IN 为空时不能进入，显示 WAIT 表示脚印还在路上或接收处被占用。");
 	case 2:
-		return LOCTEXT("IntroBody03", "A 走蓝色出口，B 走橙色出口。有锁的门要先踩开关，开了就不会再关上。\n开关上写着 A 或 B，要由对应的人去踩。");
+		return LOCTEXT("IntroBody03",
+			"箱子会沿你移动的方向被推到下一格，目标格必须能放箱子。箱子推走后，原来的位置会露出可以踩的脚印。\n"
+			"BEAT 会随成功行动轮换开关，显示 WAIT 时不能进入。寄印还可以要求另一处脚印先满足指定颜色，满足后才会送出。");
+	case 3:
+		return LOCTEXT("IntroBody04",
+			"A 在 REC 按 E 开始录制，接下来的三次成功移动会被记住；B 在 PLAY 按 E 预览并回放。被拒绝的移动不会录入。\n"
+			"站到 TURN 按 E 可以转动桥面，桥上的脚印会一起移动；两人都必须离开桥面后才能转。");
 	case 4:
-		return LOCTEXT("IntroBody05", "石板旁的短条是剩余步数。人离开后，接下来的每次成功移动都会让它少一格。\n有人站在上面时不会倒数。另一个人及时踩上去，步数就会补满。");
-	case 5:
-		return LOCTEXT("IntroBody06", "站在 TURN 处按 E 看转动后的位置，再按 E 转桥。桥上的脚印会跟着一起过去。\n两个人都离开桥面，桥才能转。");
-	case 6:
-		return LOCTEXT("IntroBody07", "踩上 OUT，会把连线另一端的 IN 变成来源脚印的颜色。踩过 IN 后，照常留下自己的脚印。\nIN 还是空的就不能走。显示 WAIT 时，脚印还没送到，或有人占着接收的位置。");
-	case 7:
-		return LOCTEXT("IntroBody08", "A 在 REC 处按 E，录下接下来走的三个方向。B 到 PLAY 处按 E 预览，再按 E 照着走。\n回放的每一格都要有 A 的蓝色脚印。走不了的步子不会录进去。");
-	case 8:
-		return LOCTEXT("IntroBody09", "标着 1 的石板，一离开就会塌。\n先看看后面还用不用回来。");
-	case 10:
-		return LOCTEXT("IntroBody11", "有些石板会存下第一次收到的脚印。原来的颜色改了，存下的这一份还在。\n先留好后面要用的颜色。");
-	case 11:
-		return LOCTEXT("IntroBody12", "两个人分别走上相邻的 SWAP 石板。按一次 E 看位置，再按一次交换。\n站在 TURN 处也能按 E 转桥，桥面要先空出来。");
-	case 12:
-		return LOCTEXT("IntroBody13", "之前存下的颜色还能送回来。先看清来源，再踩传送脚印的石板。\n换的是脚印颜色，两个人的位置不会变。");
-	case 13:
-		return LOCTEXT("IntroBody14", "这里的脚印要过三步才送到。倒数只算成功移动，Tab 换人不会影响它。\nIN 上有人时会等他离开，再把脚印送过去。");
+		return LOCTEXT("IntroBody05",
+			"巡逻格会随行动推进；NEXT 标出它下一步的位置，红色危险格不能进入。\n"
+			"部分印板会保存第一次收到的颜色，之后仍可送回；带延迟的寄印要经过指定次数成功行动才会到达，WAIT 会一直提示。\n"
+			"相邻的 SWAP 印板可以一次交换两人位置；TURN 会让桥面和脚印一起转向，桥面必须先空出来。");
 	default:
 		return FText::GetEmpty();
 	}
@@ -867,19 +922,13 @@ FText AGridManager::GetMechanicIntroBody() const
 
 FText AGridManager::GetMechanicIntroExample() const
 {
-	switch (GetSourceLevelIndex())
+	switch (LevelIndex)
 	{
 	case 0: return LOCTEXT("IntroExample01", "A 先走过去。等他让开，换 B 踩蓝色脚印。");
-	case 2: return LOCTEXT("IntroExample03", "踩亮对应的开关，门就开了。");
-	case 4: return LOCTEXT("IntroExample05", "石板闪了也还能走，别再多耽误一步。");
-	case 5: return LOCTEXT("IntroExample06", "E 看位置，再按 E 转桥。Esc 取消。");
-	case 6: return LOCTEXT("IntroExample07", "OUT 是发出的一端，沿连线找到 IN。");
-	case 7: return LOCTEXT("IntroExample08", "A 录三步，B 照着走。");
-	case 8: return LOCTEXT("IntroExample09", "离开前，确认另一个人已经过来了。");
-	case 10: return LOCTEXT("IntroExample11", "原来的脚印还会变，先存下要用的那一份。");
-	case 11: return LOCTEXT("IntroExample12", "先分别走上两块 SWAP，再按 E。");
-	case 12: return LOCTEXT("IntroExample13", "看好存下的颜色和它要送去的地方。");
-	case 13: return LOCTEXT("IntroExample14", "等脚印送来的时候，也可以去准备别的路。");
+	case 1: return LOCTEXT("IntroExample02", "先看冰面终点；再确认 OUT 发往哪块 IN。");
+	case 2: return LOCTEXT("IntroExample03", "推箱前先看箱子后面的格子；BEAT 的下一拍显示在 HUD 上。");
+	case 3: return LOCTEXT("IntroExample04", "A 录三步，B 照着走；转桥前先让两人下桥。");
+	case 4: return LOCTEXT("IntroExample05", "看到 WAIT 表示脚印还没到，可以先去准备下一段路。");
 	default: return FText::GetEmpty();
 	}
 }
@@ -1439,6 +1488,7 @@ void AGridPuzzlePlayerController::Confirm()
 	switch (Manager->GetScreen())
 	{
 	case EGridScreen::Menu: Manager->Start(); break;
+	case EGridScreen::Achievements: Manager->ShowMenu(); break;
 	case EGridScreen::MechanicIntro: Manager->DismissMechanicIntro(); break;
 	case EGridScreen::Paused:
 	case EGridScreen::Controls: Manager->TogglePause(); break;
