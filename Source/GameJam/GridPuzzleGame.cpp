@@ -335,8 +335,8 @@ bool AGridManager::LoadLevel(int32 Index, int32 Section, bool bContinueChapter)
 	PositionCamera(false);
 	if (bPlayMusic)
 	{
-		Music->StartChapter(IsPrototype() ? 0 : LevelIndex, Rules.GetSize(), Data->RhythmTiles.IsEmpty() ? 0 : Rules.GetRhythmPeriod());
 		Music->SetVolume(IsMusicEnabled() ? MusicVolume : 0.f);
+		Music->StartChapter(IsPrototype() ? 0 : LevelIndex, Rules.GetSize(), Data->RhythmTiles.IsEmpty() ? 0 : Rules.GetRhythmPeriod());
 	}
 	else { Music->StopMusic(); }
 	UE_LOG(LogTemp, Display, TEXT("Puzzle loaded: %d / %d, %d tiles"), GetLevelNumber(), GetLevelCount(), TileActors.Num());
@@ -1197,7 +1197,7 @@ void AGridManager::UseAction()
 		UpdateBridgeDisplays();
 		UpdateControl();
 		UnlockInputAt = GetWorld()->GetTimeSeconds() + SwapTime;
-		Music->NotifyMove(ActiveRole, Move, false, Rules.GetMoveCount());
+		Music->NotifyMove(ActiveRole, Move, Rules.GetMoveCount());
 		SetFeedback(LOCTEXT("SwapDone", "换好位置了。"));
 		TryCollectEchoAt(Rules.GetPosition(EPlayerRole::PlayerA));
 		TryCollectEchoAt(Rules.GetPosition(EPlayerRole::PlayerB));
@@ -1274,7 +1274,7 @@ void AGridManager::Move(FIntPoint Direction)
 // 将已经结算的规则结果转换成走路动画、地块刷新、事件通知与音效。
 void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 {
-	Music->NotifyMove(Mover, MoveResult, Rules.IsComplete(), Rules.GetMoveCount());
+	Music->NotifyMove(Mover, MoveResult, Rules.GetMoveCount());
 	const float Duration = StepTime * FMath::Max(1, MoveResult.Path.Num());
 	UnlockInputAt = GetWorld()->GetTimeSeconds() + Duration;
 	Feedback = FText::GetEmpty();
@@ -1300,7 +1300,8 @@ void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 		SetFeedback(LOCTEXT("BridgeExit", "桥关了，站在上面的人还能走出去。"));
 	}
 	TryCollectEchoAt(MoveResult.To);
-	if (bPlaySound && !(MoveResult.bReachedGoal && IsMusicEnabled()))
+	// 抵达与通关属于音效，不随音乐静音，也不依赖底乐是否成功播放。
+	if (bPlaySound)
 	{
 		EGridSound Sound = EGridSound::Step;
 		if (MoveResult.bReachedGoal) { Sound = EGridSound::Goal; }
@@ -1309,7 +1310,11 @@ void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 		else if (Destination.HasFootprints()) { Sound = EGridSound::Print; }
 		// 大部分移动踩在脚印上，Step、Print、Transfer 都属于落脚声。
 		const bool bFootstep = Sound == EGridSound::Step || Sound == EGridSound::Print || Sound == EGridSound::Transfer;
-		PlayGridSound(this, Sound, bFootstep ? .45f : 1.f);
+		// 最后一个角色抵达时由 CheckCompletion 播通关声，避免两个提示重叠。
+		if (!MoveResult.bReachedGoal || !Rules.IsComplete())
+		{
+			PlayGridSound(this, Sound, bFootstep ? .45f : 1.f);
+		}
 		if (bCollapsed) { PlayGridSound(this, EGridSound::Collapse); }
 		if (bBridgeChanged) { PlayGridSound(this, EGridSound::Bridge); }
 		if (MoveResult.bSentPrint) { PlayGridSound(this, EGridSound::Bridge); }
@@ -1350,8 +1355,8 @@ void AGridManager::CheckCompletion()
 		SaveLevelProgress();
 		SetScreen(EGridScreen::Transition);
 		OnLevelCompleted.Broadcast();
-		Music->Complete();
-		if (bPlaySound && !IsMusicEnabled()) { PlayGridSound(this, EGridSound::Complete); }
+		Music->CancelAccents();
+		if (bPlaySound) { PlayGridSound(this, EGridSound::Complete); }
 		GetWorldTimerManager().SetTimer(ScreenTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
 		{
 			SetScreen(EGridScreen::Complete);

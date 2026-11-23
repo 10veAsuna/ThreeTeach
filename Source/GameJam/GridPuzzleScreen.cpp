@@ -94,9 +94,9 @@ namespace
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,14)
 			[Text(LOCTEXT("Theme", "同行"), 16, Blue)]
 			+ SVerticalBox::Slot().AutoHeight()
-			[DisplayText(LOCTEXT("Title", "借我一步"), 84)]
+			[DisplayText(LOCTEXT("Title", "彼此的路"), 84)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(6,0,0,34)
-			[Text(LOCTEXT("Subtitle", "ONE STEP FOR YOU"), 17, Muted, true)]
+			[Text(LOCTEXT("Subtitle", "PATHS WE SHARE"), 17, Muted, true)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,32)
 			[Text(LOCTEXT("Intro", "你先走，我跟上。"), 20, Muted)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,22)
@@ -116,7 +116,7 @@ namespace
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
 			[Button(LOCTEXT("Achievements", "成就"), &Manager, &AGridManager::ShowAchievements)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
-			[Button(LOCTEXT("Controls", "怎么玩"), &Manager, &AGridManager::ShowControls)]
+			[Button(LOCTEXT("Controls", "玩法说明"), &Manager, &AGridManager::ShowControls)]
 			+ SVerticalBox::Slot().AutoHeight()
 			[Button(LOCTEXT("Exit", "退出游戏"), &Manager, &AGridManager::Exit)];
 	}
@@ -350,7 +350,7 @@ namespace
 		switch (Manager.GetScreen())
 		{
 		case EGridScreen::MechanicIntro:
-			Heading(LOCTEXT("NewMechanic", "先看一下"));
+			Heading(LOCTEXT("NewMechanic", "机关说明"));
 			Body->AddSlot().AutoHeight().Padding(0,0,0,10)
 			[
 				SNew(STextBlock).Font(DisplayFont(30)).ColorAndOpacity(Blue)
@@ -374,13 +374,13 @@ namespace
 				]
 			];
 			Body->AddSlot().AutoHeight().Padding(0,16,0,0)
-			[Button(LOCTEXT("EnterLevel", "开始吧"), &Manager, &AGridManager::DismissMechanicIntro, true)];
+			[Button(LOCTEXT("EnterLevel", "进入关卡"), &Manager, &AGridManager::DismissMechanicIntro, true)];
 			break;
 		case EGridScreen::Controls:
-			Heading(LOCTEXT("ControlTitle", "怎么玩"));
+			Heading(LOCTEXT("ControlTitle", "玩法说明"));
 			Row(LOCTEXT("Movement", "WASD / 方向键"), LOCTEXT("GridMovement", "走一步；踩到冰面会继续滑"));
 			Row(LOCTEXT("SwitchKey", "Tab"), LOCTEXT("SwitchPlayer", "切换 A 和 B"));
-			Row(LOCTEXT("PreviewKey", "H"), LOCTEXT("PreviewHelp", "看看下一步能去哪儿"));
+			Row(LOCTEXT("PreviewKey", "H"), LOCTEXT("PreviewHelp", "查看可移动的位置"));
 			Row(LOCTEXT("InteractKey", "E"), LOCTEXT("InteractHelp", "操作脚下的机关，或确认预览"));
 			Row(LOCTEXT("UndoKey", "Z / Ctrl+Z"), LOCTEXT("UndoHelp", "退回上一次操作，可以连续撤销"));
 			Row(LOCTEXT("ResetKey", "R"), LOCTEXT("ResetHelp", "从这关的起点重来"));
@@ -397,16 +397,16 @@ namespace
 			Action(LOCTEXT("Back", "返回"), &AGridManager::TogglePause, true);
 			break;
 		case EGridScreen::Paused:
-			Heading(LOCTEXT("Paused", "歇一下"));
+			Heading(LOCTEXT("Paused", "暂停游戏"));
 			Action(LOCTEXT("Resume", "继续游戏"), &AGridManager::TogglePause, true);
 			if (Manager.HasUndoMove()) { Action(LOCTEXT("Undo", "撤销上一步"), &AGridManager::UndoMove); }
 			Action(LOCTEXT("Reset", "重新开始"), &AGridManager::ResetLevel);
-			Action(LOCTEXT("Controls", "怎么玩"), &AGridManager::ShowControls);
+			Action(LOCTEXT("Controls", "玩法说明"), &AGridManager::ShowControls);
 			Action(LOCTEXT("Select", "选关"), &AGridManager::ShowSelection);
 			Action(LOCTEXT("MainMenu", "返回菜单"), &AGridManager::ShowMenu);
 			break;
 		case EGridScreen::Complete:
-			Heading(LOCTEXT("Clear", "过关了"));
+			Heading(LOCTEXT("Clear", "关卡完成"));
 			Body->AddSlot().AutoHeight().Padding(0,0,0,17)
 			[
 				Text(FText::Format(LOCTEXT("ClearDetails", "{0}  ·  {1} 步"),
@@ -474,9 +474,9 @@ TSharedRef<SWidget> MakeGridPuzzleScreen(AGridManager& Manager)
 			[
 				Card(SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-					[Text(LOCTEXT("EndingLine1", "到了。"), 30)]
+					[Text(LOCTEXT("EndingLine1", "我们一起走到了这里。"), 30)]
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0,8,0,14)
-					[Text(LOCTEXT("EndingLine2", "下次也一起走吧。"), 20, Muted)]
+					[Text(LOCTEXT("EndingLine2", "感谢游玩《彼此的路》。"), 20, Muted)]
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
 					[
 						SNew(SHorizontalBox)

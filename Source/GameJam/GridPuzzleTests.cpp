@@ -10,6 +10,8 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "GridPuzzleAudioWave.h"
+#include "Sound/SoundGenerator.h"
 
 namespace
 {
@@ -917,6 +919,47 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Reset clears undo history"), Manager->HasUndoMove());
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);
+	return true;
+}
+
+// 直接读取音频线程使用的生成器，验证尾部释放、循环衔接及重复播放时的独立位置。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridAudioPlaybackTest, "OneStep.Audio.PcmPlayback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGridAudioPlaybackTest::RunTest(const FString& Parameters)
+{
+	FSoundGeneratorInitParams Params{};
+	UGridPcmSoundWave* Cue = NewObject<UGridPcmSoundWave>();
+	Cue->SetPcm(TArray<int16>{16384, -8192, 4096}, 1, 24000, false);
+	const auto First = Cue->CreateSoundGenerator(Params);
+	const auto Second = Cue->CreateSoundGenerator(Params);
+	float Buffer[8];
+	TestFalse(TEXT("A short cue starts unfinished"), First->IsFinished());
+	First->GetNextBuffer(Buffer, 2);
+	TestEqual(TEXT("PCM is converted to the mixer range"), Buffer[0], .5f);
+	TestFalse(TEXT("The cue preserves its remaining sample"), First->IsFinished());
+	First->GetNextBuffer(Buffer, 8);
+	TestEqual(TEXT("The final sample is played"), Buffer[0], .125f);
+	for (int32 Index = 1; Index < 8; ++Index)
+	{
+		TestEqual(TEXT("The end of a short buffer is padded with silence"), Buffer[Index], 0.f);
+	}
+	TestTrue(TEXT("An exhausted cue releases its voice instead of streaming silence"), First->IsFinished());
+	Second->GetNextBuffer(Buffer, 2);
+	TestEqual(TEXT("A new playback has an independent cursor"), Buffer[0], .5f);
+
+	UGridPcmSoundWave* Bed = NewObject<UGridPcmSoundWave>();
+	Bed->SetPcm(TArray<int16>{16384, -16384, 8192, -8192}, 2, 24000, true);
+	const auto Loop = Bed->CreateSoundGenerator(Params);
+	for (int32 Callback = 0; Callback < 200; ++Callback)
+	{
+		Loop->GetNextBuffer(Buffer, 8);
+		TestFalse(TEXT("The background remains active across many loop boundaries"), Loop->IsFinished());
+		TestEqual(TEXT("The loop wraps without inserting a silent block"), Buffer[4], .5f);
+		TestEqual(TEXT("Stereo ordering is preserved across the boundary"), Buffer[5], -.5f);
+	}
+	TestTrue(TEXT("Muted background music retains its playback position"),
+		Bed->VirtualizationMode == EVirtualizationMode::PlayWhenSilent);
 	return true;
 }
 

@@ -1,20 +1,20 @@
 #include "GridPuzzleMusic.h"
 
 #include "GridMusicScore.h"
+#include "GridPuzzleAudioWave.h"
 #include "Components/AudioComponent.h"
 #include "Kismet/GameplayStatics.h"
-#include "Sound/SoundWaveProcedural.h"
 
 namespace
 {
 	constexpr float BackgroundGain = 1.4f;
-	USoundWaveProcedural* MakeMusicWave(UObject* Outer)
+	UGridPcmSoundWave* MakeMusicWave(UObject* Outer, const std::vector<std::int16_t>& Samples, bool bRepeat)
 	{
-		auto* Wave = NewObject<USoundWaveProcedural>(Outer);
-		Wave->SetSampleRate(GridMusic::SampleRate);
-		Wave->NumChannels = 2;
+		auto* Wave = NewObject<UGridPcmSoundWave>(Outer);
+		TArray<int16> Pcm;
+		Pcm.Append(Samples.data(), int32(Samples.size()));
+		Wave->SetPcm(MoveTemp(Pcm), 2, GridMusic::SampleRate, bRepeat);
 		Wave->SoundGroup = SOUNDGROUP_Music;
-		Wave->bLooping = false;
 		return Wave;
 	}
 }
@@ -30,53 +30,60 @@ void UGridMusicComponent::StartChapter(int32 Chapter, FIntPoint BoardSize, int32
 	GridSize = FIntPoint(FMath::Max(2, BoardSize.X), FMath::Max(2, BoardSize.Y));
 	RhythmPeriod = FMath::Max(0, BeatPeriod);
 	CancelAccents();
-	if (ChapterIndex == Chapter && BedAudio) { return; }
+	if (ChapterIndex == FMath::Clamp(Chapter, 0, 4) && BedAudio)
+	{
+		UpdateBedVolume();
+		return;
+	}
 	StopMusic();
 	ChapterIndex = FMath::Clamp(Chapter, 0, 4);
-	// 预先合成完整八小节，后续只补充 PCM 队列，避免边玩边合成底乐。
+	// 预先合成完整八小节，由音频线程直接循环，不依赖游戏帧补队列。
+	std::vector<std::int16_t> Loop;
 	for (int32 Bar = 0; Bar < 8; ++Bar)
 	{
 		const auto Samples = GridMusic::RenderBar(ChapterIndex, Bar);
-		TArray<uint8>& Bytes = Bars.AddDefaulted_GetRef();
-		Bytes.Append(reinterpret_cast<const uint8*>(Samples.data()), int32(Samples.size() * sizeof(int16)));
+		Loop.insert(Loop.end(), Samples.begin(), Samples.end());
 	}
-	BedWave = MakeMusicWave(this);
-	BedWave->Duration = INDEFINITELY_LOOPING_DURATION;
-	for (int32 Index = 0; Index < 2; ++Index)
-	{
-		BedWave->QueueAudio(Bars[NextBar].GetData(), Bars[NextBar].Num());
-		NextBar = (NextBar + 1) % Bars.Num();
-	}
+	BedWave = MakeMusicWave(this, Loop, true);
+	BedWave->Priority = 2.f;
 	BedAudio = UGameplayStatics::CreateSound2D(this, BedWave, MusicVolume * MoodVolume * BackgroundGain, 1.f, 0.f, nullptr, false, false);
 	if (BedAudio)
 	{
 		BedAudio->SetUISound(true);
-		BedAudio->FadeIn(1.f, MusicVolume * MoodVolume * BackgroundGain);
+		// 淡入系数与实际音量分开，避免音量被重复相乘。
+		BedAudio->FadeIn(1.f, 1.f);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Music could not start: no audio component was created for chapter %d."), ChapterIndex + 1);
 	}
 }
 
 void UGridMusicComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTick)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTick);
-	if (!BedWave || !BedAudio || Bars.IsEmpty()) { return; }
-	// 至少排队一个完整小节。暂停时组件仍补队列，音频渲染线程只读取已准备好的采样。
-	if (BedWave->GetAvailableAudioByteCount() < Bars[0].Num())
-	{
-		BedWave->QueueAudio(Bars[NextBar].GetData(), Bars[NextBar].Num());
-		NextBar = (NextBar + 1) % Bars.Num();
-	}
+	// 若设备切换或通道回收使底乐停止，在恢复播放条件后重新启动。
+	if (BedAudio && MusicVolume > 0.f && !BedAudio->IsPlaying()) { UpdateBedVolume(); }
+}
+
+void UGridMusicComponent::UpdateBedVolume()
+{
+	if (!BedAudio) { return; }
+	// AdjustVolume(..., 0) 会结束播放；用音量乘数静音，保留循环和播放位置。
+	BedAudio->SetVolumeMultiplier(MusicVolume * MoodVolume * BackgroundGain);
+	if (MusicVolume > 0.f && !BedAudio->IsPlaying()) { BedAudio->Play(); }
 }
 
 void UGridMusicComponent::SetMood(bool bQuiet, bool bCompleted)
 {
 	MoodVolume = bCompleted ? .28f : bQuiet ? .48f : 1.f;
-	if (BedAudio) { BedAudio->AdjustVolume(.45f, MusicVolume * MoodVolume * BackgroundGain); }
+	UpdateBedVolume();
 }
 
 void UGridMusicComponent::SetVolume(float Volume)
 {
 	MusicVolume = FMath::Clamp(Volume, 0.f, 1.f);
-	if (BedAudio) { BedAudio->AdjustVolume(.2f, MusicVolume * MoodVolume * BackgroundGain); }
+	UpdateBedVolume();
 	// 静音也立即停止尚未结束的回应乐句。
 	if (MusicVolume == 0.f) { CancelAccents(); }
 }
@@ -94,9 +101,7 @@ void UGridMusicComponent::PlayPhrase(const std::vector<std::int16_t>& Data, floa
 		if (Accents[0].IsValid()) { Accents[0]->Stop(); }
 		Accents.RemoveAt(0);
 	}
-	auto* Wave = MakeMusicWave(this);
-	Wave->Duration = float(Data.size()) / (GridMusic::SampleRate * 2.f);
-	Wave->QueueAudio(reinterpret_cast<const uint8*>(Data.data()), int32(Data.size() * sizeof(int16)));
+	auto* Wave = MakeMusicWave(this, Data, false);
 	if (UAudioComponent* Accent = UGameplayStatics::SpawnSound2D(this, Wave, MusicVolume * Gain))
 	{
 		Accent->SetUISound(false);
@@ -104,9 +109,9 @@ void UGridMusicComponent::PlayPhrase(const std::vector<std::int16_t>& Data, floa
 	}
 }
 
-void UGridMusicComponent::NotifyMove(EPlayerRole Mover, const FGridMove& Move, bool bBothFinished, int32 MoveCount)
+void UGridMusicComponent::NotifyMove(EPlayerRole Mover, const FGridMove& Move, int32 MoveCount)
 {
-	if (!BedAudio || MusicVolume == 0.f) { return; }
+	if (!BedAudio || MusicVolume == 0.f || Move.bReachedGoal) { return; }
 	const bool bBlue = Mover == EPlayerRole::PlayerA;
 	if (Move.bRecordedStep || Move.bReplayStep)
 	{
@@ -159,17 +164,6 @@ void UGridMusicComponent::NotifyMove(EPlayerRole Mover, const FGridMove& Move, b
 		}
 		PlayPhrase(GridMusic::Render(Beat, .5 + (Landings - 1) * .07));
 	}
-	if (Move.bReachedGoal && !bBothFinished)
-	{
-		CancelAccents();
-		PlayPhrase(GridMusic::Render(GridMusic::Goal(bBlue, false), 2.4));
-	}
-}
-
-void UGridMusicComponent::Complete()
-{
-	CancelAccents();
-	PlayPhrase(GridMusic::Render(GridMusic::Goal(true, true), 4.7));
 }
 
 void UGridMusicComponent::CancelAccents()
@@ -188,9 +182,7 @@ void UGridMusicComponent::StopMusic()
 	if (BedAudio) { BedAudio->Stop(); BedAudio->DestroyComponent(); }
 	BedAudio = nullptr;
 	BedWave = nullptr;
-	Bars.Reset();
 	ChapterIndex = INDEX_NONE;
-	NextBar = 0;
 }
 
 void UGridMusicComponent::EndPlay(const EEndPlayReason::Type Reason)

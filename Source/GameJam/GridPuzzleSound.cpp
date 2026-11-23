@@ -1,7 +1,7 @@
 #include "GridPuzzleSound.h"
 
+#include "GridPuzzleAudioWave.h"
 #include "Kismet/GameplayStatics.h"
-#include "Sound/SoundWaveProcedural.h"
 
 // 根据事件生成单声道 PCM 数据，通过 USoundWaveProcedural 播放。
 void PlayGridSound(UObject* Context, EGridSound Sound, float Volume)
@@ -52,12 +52,7 @@ void PlayGridSound(UObject* Context, EGridSound Sound, float Volume)
 		}
 		Data[Index] = static_cast<int16>(Envelope * Signal * Cue.Level * 32767.f);
 	}
-	USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>();
-	Wave->SetSampleRate(SampleRate);
-	Wave->NumChannels = 1;
-	Wave->Duration = Cue.Duration;
-	Wave->bLooping = false;
-	// 采样缓冲以字节入队，再交给 UE 音频系统播放。
-	Wave->QueueAudio(reinterpret_cast<const uint8*>(Data.GetData()), Data.Num() * sizeof(int16));
+	UGridPcmSoundWave* Wave = NewObject<UGridPcmSoundWave>();
+	Wave->SetPcm(MoveTemp(Data), 1, SampleRate, false);
 	UGameplayStatics::PlaySound2D(Context, Wave, FMath::Clamp(Volume, 0.f, 1.f));
 }
