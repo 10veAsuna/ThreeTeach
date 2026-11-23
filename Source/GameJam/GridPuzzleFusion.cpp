@@ -71,23 +71,23 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateFusionLevels()
 		Result.Add(Level);
 		return Level;
 	};
-	UGridLevelDataAsset* Crate = Add(LOCTEXT("CrateTitle", "推箱接力"),
-		LOCTEXT("CrateHint", "推箱必须踩进同伴留下的印记。先让 A 腾出推箱位，再由 B 反向接手。"),
+	UGridLevelDataAsset* Crate = Add(LOCTEXT("CrateTitle", "推箱"),
+		LOCTEXT("CrateHint", "推开箱子后，也要能踩进它下面的脚印。别把另一个人的路堵住。"),
 		{TEXT("   oo"), TEXT(" AoouBa"), TEXT("   bo")});
 	Crate->Crates = {{3, 1}};
 
-	UGridLevelDataAsset* Ice = Add(LOCTEXT("IceTitle", "借你的滑道"),
-		LOCTEXT("IceHint", "踏入 ICE 后沿连续同伴脚印滑行，直到下一格不可走或离开冰面。一次 Z 撤销整段滑行。"),
+	UGridLevelDataAsset* Ice = Add(LOCTEXT("IceTitle", "冰面"),
+		LOCTEXT("IceHint", "踩到 ICE 会继续往前滑，每一格都得有对方的脚印。按 Z 可以退回滑行前。"),
 		{TEXT("    o"), TEXT("bAoouBa")});
 	Ice->IceTiles = {{2, 1}, {3, 1}};
 
-	UGridLevelDataAsset* Rhythm = Add(LOCTEXT("RhythmTitle", "给你留一拍"),
-		LOCTEXT("RhythmHint", "BEAT 每三次成功落脚关闭一次。让同伴移动来让拍，切换角色不耗拍。"),
+	UGridLevelDataAsset* Rhythm = Add(LOCTEXT("RhythmTitle", "节拍"),
+		LOCTEXT("RhythmHint", "BEAT 每三步关一次。按 Tab 不算步数，要让另一个人走一步。"),
 		{TEXT("    oo"), TEXT("bAoouBa")});
 	Rhythm->RhythmTiles = {{3, 1}};
 
-	UGridLevelDataAsset* Patrol = Add(LOCTEXT("PatrolTitle", "交替穿过巡逻"),
-		LOCTEXT("PatrolHint", "红色巡逻点每次成功落脚前进一格，NEXT 是下一格。先让同伴脱离危险再沿他的脚印走。"),
+	UGridLevelDataAsset* Patrol = Add(LOCTEXT("PatrolTitle", "巡逻"),
+		LOCTEXT("PatrolHint", "每走一步，红点也走一格。NEXT 是它接下来要去的地方。"),
 		{TEXT("  ##o"), TEXT("bAoouBa")});
 	Patrol->PatrolRoute = {{2, 0}, {3, 0}, {3, 1}, {2, 1}};
 	return Result;
@@ -120,43 +120,56 @@ TArray<UGridLevelDataAsset*> AGridManager::CreateCampaignLevels()
 		Effect.bOnce = true;
 	};
 
-	auto* First = Map(2, LOCTEXT("Map1", "第一章 · 回来接我"),
-		LOCTEXT("Map1Hint", "B 先给 A 写下入口印。A 走到尽头开锁，B 再沿原路把 A 的回程改成橙印。"));
-	First->Rows = {TEXT("x"), TEXT("Auooo"), TEXT(" B  o"), TEXT("    oooos"), TEXT("       b")};
+	auto* First = Map(2, LOCTEXT("Map1", "初见"),
+		LOCTEXT("Map1Hint", "窄路上得让个人。先看看上面那一格。"));
+	First->Rows = {TEXT("    s"), TEXT("yAoouBx")};
 
-	auto* Second = Map(4, LOCTEXT("Map2", "第二章 · 薄冰交班"),
-		LOCTEXT("Map2Hint", "两人要在同一块脆石上交班。把上岸的脚印留好，最后从冰道滑过一次性石板。"));
+	auto* Second = Map(4, LOCTEXT("Map2", "薄冰"),
+		LOCTEXT("Map2Hint", "B 先把橙色脚印传到冰道入口，A 再给 B 留出往下走的路。"));
 	Second->Rows[0] = TEXT("  mocca");
 	Second->IceTiles = {{3, 0}};
 	Send(Second, {2, 4}, B, {2, 4}, {2, 0});
+	Second->Rows[5] = TEXT("  m");
+	Second->Rows.Add(TEXT("  b"));
+	Send(Second, {3, 0}, A, {3, 0}, {2, 5});
 
-	auto* Third = Map(6, LOCTEXT("Map3", "第三章 · 印记中转站"),
-		LOCTEXT("Map3Hint", "两岸同时留下正确印色。A 沿冰面去推箱，把蓝印寄到南岸；B 在南岸回寄橙印，A 才能出站。"));
+	auto* Third = Map(6, LOCTEXT("Map3", "来信"),
+		LOCTEXT("Map3Hint", "两边的颜色都对了才会传送脚印。箱子推开以后，原来的地方还要再走一次。"));
 	Third->Rows[0] = TEXT("        o");     // 箱子的停放点
-	Third->Rows[1] = TEXT("        oma");  // 推箱位、等回信的空印、A 出口
-	Third->Rows[7] = TEXT("        m");
+	Third->Rows[1] = TEXT("        ooa");  // 推箱位、等回信的空印、A 出口
+	Third->Rows[7] = TEXT("        mmb");
+	Third->Rows[8] = TEXT("        o");
 	Third->Crates = {{8, 1}};
 	Third->IceTiles = {{1, 2}};
 	Third->RhythmTiles = {{2, 6}};
 	Send(Third, {8, 1}, A, {8, 1}, {8, 7});
-	Send(Third, {8, 7}, B, {8, 7}, {9, 1});
+	Send(Third, {8, 7}, B, {8, 7}, {8, 1});
+	Send(Third, {8, 1}, A, {8, 1}, {9, 7});
+	// 必须等 B 在南碑上留下橙印，A 折返原碑时才可打开最后的路。
+	Third->PrintEffects.Last().Requirements.Add({{8, 7}, EPlayerRole::PlayerB});
+	Third->PrintEffects.Last().Links.Emplace(FIntPoint(8, 7), FIntPoint(9, 1));
 
-	auto* Fourth = Map(7, LOCTEXT("Map4", "第四章 · 隔岸同拍"),
-		LOCTEXT("Map4Hint", "录下转弯的三步给 B。A 到东岸后在桥头留印、退回开关转桥，B 才能踩着这枚印走完回放后的路。"));
+	auto* Fourth = Map(7, LOCTEXT("Map4", "回声"),
+		LOCTEXT("Map4Hint", "B 在对面照着 A 的三步走。过了桥，再把留下的橙色脚印转回来。"));
 	Fourth->Rows[3] = TEXT("        o");
-	Fourth->Rows[5] = TEXT("      mu b");
+	Fourth->Rows[5] = TEXT("      mu umb");
 	Fourth->Rows[6] = TEXT("Bmuuumm");
 	Fourth->TurnPivot = {7, 4};
 	Fourth->InitialDeck = {{8, 3}};
 	Fourth->AlternateDeck = {{8, 5}};
 	Fourth->TurnControls = {{8, 2}};
+	// B 第一次上岸只恢复前半条旧路，最后一格等第二轮借印后才会送达。
+	Fourth->PrintEffects.Last().Links.Pop();
+	Send(Fourth, {8, 3}, A, {8, 3}, {10, 5});
+	Fourth->PrintEffects.Last().Requirements.Add({{9, 5}, EPlayerRole::PlayerB});
+	Send(Fourth, {10, 5}, B, {10, 5}, {7, 2});
 	Fourth->RhythmTiles = {{1, 2}};
 
-	auto* Fifth = Map(11, LOCTEXT("Map5", "第五章 · 一路接住你"),
-		LOCTEXT("Map5Hint", "看巡逻点让步，互寄脚印到会合处。换位后把桥转给同伴；南岸保存的拓印，要等 A 到岸才会寄回北边。"));
-	Fifth->Rows[1] = TEXT(" ##     m");
+	auto* Fifth = Map(11, LOCTEXT("Map5", "同行"),
+		LOCTEXT("Map5Hint", "两个人都要经过路口，别让巡逻碰到等着的人。南边存着的橙色脚印后面还要用。"));
+	Fifth->Rows[1] = TEXT("   ###  m");
 	Fifth->Rows[6] += TEXT("m"); // 隔空碑保存 B 的印色
-	Fifth->PatrolRoute = {{1, 1}, {2, 1}, {2, 2}, {1, 2}};
+	Fifth->PatrolRoute = {{5, 2}, {4, 2}, {3, 2}, {3, 1}, {4, 1}, {5, 1}};
 	// 北岸门前的蓝印延时送达。南岸则取出此前寄存的橙印。
 	Fifth->PrintEffects[0].DelayMoves = 2;
 	Fifth->PrintEffects[1].Links[0].Target = {9, 6};

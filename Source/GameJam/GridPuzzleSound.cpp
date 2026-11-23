@@ -4,7 +4,7 @@
 #include "Sound/SoundWaveProcedural.h"
 
 // 根据事件生成单声道 PCM 数据，通过 USoundWaveProcedural 播放。
-void PlayGridSound(UObject* Context, EGridSound Sound)
+void PlayGridSound(UObject* Context, EGridSound Sound, float Volume)
 {
 	// 每行依次配置时长、主频、后续叠加频率和音量，顺序对应 EGridSound。
 	static constexpr struct
@@ -59,5 +59,5 @@ void PlayGridSound(UObject* Context, EGridSound Sound)
 	Wave->bLooping = false;
 	// 采样缓冲以字节入队，再交给 UE 音频系统播放。
 	Wave->QueueAudio(reinterpret_cast<const uint8*>(Data.GetData()), Data.Num() * sizeof(int16));
-	UGameplayStatics::PlaySound2D(Context, Wave);
+	UGameplayStatics::PlaySound2D(Context, Wave, FMath::Clamp(Volume, 0.f, 1.f));
 }

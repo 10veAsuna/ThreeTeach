@@ -248,7 +248,8 @@ bool FGridPrototypeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Blue starts recording"), Record.StartRecording(Blue));
 	Record.TryMove(Blue, Up);
 	TestTrue(TEXT("Rejected moves do not get recorded"), Record.GetRecording().IsEmpty());
-	Record.TryMove(Blue, Right);
+	const FGridMove RecordedStep = Record.TryMove(Blue, Right);
+	TestTrue(TEXT("A recorded landing carries its musical direction"), RecordedStep.bRecordedStep);
 	Record.TryMove(Blue, Right);
 	Record.TryMove(Blue, Up);
 	Record.TryMove(Orange, Up);
@@ -268,6 +269,8 @@ bool FGridPrototypeTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Replay step one and three retain distinct landing states"),
 		States[0].GetPosition(Orange) == FIntPoint(2, 3) && States.Last().GetPosition(Orange) == FIntPoint(3, 2));
+	TestTrue(TEXT("Only committed replay steps carry their response marker"),
+		Steps.Num() == 3 && Steps[0].bReplayStep && Steps[1].bReplayStep && Steps[2].bReplayStep);
 	TestTrue(TEXT("All three replay steps borrow prints"),
 		Steps.Num() == 3 && Steps[0].bFootprintTransferred && Steps[1].bFootprintTransferred && Steps[2].bFootprintTransferred);
 
@@ -614,13 +617,21 @@ bool FGridPrintTimingTest::RunTest(const FString& Parameters)
 	const FIntPoint Target(4,6);
 	const auto Owner = [&Rules, Target]() { return Rules.GetTiles().FindChecked(Target).FootprintOwner; };
 	Rules.TryMove(A, {1,0});
-	Rules.TryMove(A, {1,0});
+	const FGridMove Dispatch = Rules.TryMove(A, {1,0});
+	TestEqual(TEXT("Dispatch reports one outgoing print"), Dispatch.PrintDispatches.Num(), 1);
+	TestTrue(TEXT("A delayed print has no arrival yet"), Dispatch.PrintArrivals.IsEmpty());
 	TestTrue(TEXT("Blue print is in transit"), Rules.GetTiles().FindChecked(Target).bPrintPending);
 	Rules.TryMove(A, {1,0});
 	TestTrue(TEXT("Blank print pad rejects a traveler"), Rules.TryMove(A, {1,0}).Result == EGridMoveResult::EmptyPrint);
 	Rules.TryMove(B, {1,0});
 	TestTrue(TEXT("Two successful steps leave print undelivered"), Owner() == EFootprintOwner::None);
-	Rules.TryMove(B, {1,0});
+	const FGridMove Delivery = Rules.TryMove(B, {1,0});
+	if (TestEqual(TEXT("The eventual delivery reports one arrival"), Delivery.PrintArrivals.Num(), 1))
+	{
+		TestTrue(TEXT("Delivery preserves the sending color and location"),
+			Delivery.PrintArrivals[0].Owner == EFootprintOwner::PlayerA &&
+			Delivery.PrintArrivals[0].From == FIntPoint(2, 2) && Delivery.PrintArrivals[0].To == Target);
+	}
 	TestTrue(TEXT("Third successful step delivers blue print"), Owner() == EFootprintOwner::PlayerA);
 	TestFalse(TEXT("Delivered print is no longer pending"), Rules.GetTiles().FindChecked(Target).bPrintPending);
 
@@ -635,6 +646,19 @@ bool FGridPrintTimingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("One-use print collapses on departure"), Rules.GetTiles().FindChecked(SingleUse).bIsCollapsed);
 	Rules.TryMove(B, {1,0});
 	TestTrue(TEXT("B cannot enter the collapsed blue print"), Rules.TryMove(B, {0,-1}).Result == EGridMoveResult::Collapsed);
+	FGridPuzzleRules Borrowing;
+	TestTrue(TEXT("Fresh-print sound fixture initializes"), Borrowing.Initialize(*Levels[0]));
+	TestEqual(TEXT("Preprinted terrain does not trigger a new-print response"),
+		Borrowing.TryMove(A, {1, 0}).FreshBorrowedPrintCount, 0);
+	Borrowing.TryMove(A, {1, 0});
+	Borrowing.TryMove(A, {0, -1});
+	Borrowing.TryMove(B, {-1, 0});
+	TestEqual(TEXT("Borrowing the partner's live print triggers one response"),
+		Borrowing.TryMove(B, {-1, 0}).FreshBorrowedPrintCount, 1);
+	const FGridMove Blocked = Borrowing.TryMove(B, {0, -1});
+	TestTrue(TEXT("Rejected actions emit no music events"),
+		Blocked.Result == EGridMoveResult::Occupied && Blocked.FreshBorrowedPrintCount == 0 &&
+		Blocked.PrintDispatches.IsEmpty() && Blocked.PrintArrivals.IsEmpty());
 	return true;
 }
 
@@ -762,11 +786,11 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 
 	const auto Chapters = AGridManager::CreateCampaignLevels();
 	const TCHAR* Routes[] = {
-		TEXT("BU BD AR AR AR AR AD AD AR AR AR AR BU BR BR BR BD BD BR BR BR BD AL AL AL AL AU AU AL AL AL AL AU"),
-		TEXT("AR AR BL AU BL BL BL AD AR BR BU AL BU AL BD BD BD AR AU AU AU AR AR AR BD"),
-		TEXT("AR AR AR AD AD AR BR BR BR BR BU BU BU AL AD AD AR AR AU BU BR BR BD BD BL AU AU AU AR AR AU BR BD BD BR BR BD AR AR BD"),
-		TEXT("AR AR BR BR AR AE AR AR AU AR AD AR AR AD AU AE BR BR BE BR AL AL AL AL AL AL AL AL AU BR BR"),
-		TEXT("AR BR AR AR BR BR AR BR BR BU AR BU BU AE AD AD AD AR AR AR BE BR AD AD BR BR BU BU"),
+		TEXT("AR AR BL BR AR AU BL BL AD AR AR BL BL BL"),
+		TEXT("AR AR BL AU BL BL BL AD AR BR BU AL BU AL BD BD BD AR AU AU AU AR AR AR BD BD"),
+		TEXT("AR AR AR AD AD AR BR BR BR BR BU BU BU AL AD AD AR AR AU BU BR BR BD BD BL AU AU AU AR AR AU BR BD BD BR BR BD AR AL AR AR BR BR"),
+		TEXT("AR AR BR BR AR AE AR AR AU AR AD AR AR AD AU AE BR BR BE BR BR BR AE AD AU BR BR AL AL AL AL AL AL AL AL AU"),
+		TEXT("AR AR AR BR BR BR BR AR BR BU BU BU AR AE AD AD AD BE BR AR AR AR BR AD AD BR BU BU"),
 	};
 	if (!TestEqual(TEXT("Five playable campaign boards"), Chapters.Num(), 5)) { return false; }
 	for (int32 Index = 0; Index < Chapters.Num(); ++Index)
@@ -776,6 +800,8 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 		if (!TestTrue(Board->Title.ToString(), Board->Sections.IsEmpty() && Rules.Initialize(*Board))) { return false; }
 		TArray<FString> Inputs;
 		FString(Routes[Index]).ParseIntoArrayWS(Inputs);
+		int32 TurnCount = 0;
+		bool bWaitedForReturnPrint = false;
 		for (const FString& Input : Inputs)
 		{
 			const EPlayerRole Role = Input[0] == 'A' ? Blue : Orange;
@@ -783,7 +809,9 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 			{
 				FGridMove ExchangeMove;
 				TArray<FIntPoint> DeckChanges;
-				if (Rules.TrySwap(Role, ExchangeMove) || Rules.TryTurnBridge(Role, DeckChanges) || Rules.StartRecording(Role)) { continue; }
+				if (Rules.TrySwap(Role, ExchangeMove)) { continue; }
+				if (Rules.TryTurnBridge(Role, DeckChanges)) { ++TurnCount; continue; }
+				if (Rules.StartRecording(Role)) { continue; }
 				TArray<FGridMove> Moves;
 				TArray<FGridPuzzleRules> CampaignStates;
 				if (!TestTrue(TEXT("Legal replay on campaign board"), Rules.PlanReplay(Role, Moves, CampaignStates))) { return false; }
@@ -793,9 +821,24 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 			{
 				const FIntPoint Dir = Input[1] == 'R' ? Right : Input[1] == 'L' ? Left : Input[1] == 'U' ? Up : Down;
 				if (!TestTrue(Board->Title.ToString() + TEXT(" ") + Input, Rules.TryMove(Role, Dir).Result == EGridMoveResult::Moved)) { return false; }
+				if (Index == 2 && Rules.GetPosition(Blue) == FIntPoint(8, 1) &&
+					Rules.GetPosition(Orange) != FIntPoint(8, 7))
+				{
+					bWaitedForReturnPrint = true;
+					TestTrue(TEXT("First dispatch leaves the final southern gate empty"),
+						Rules.GetTiles().FindChecked({9, 7}).FootprintOwner == EFootprintOwner::None);
+				}
 			}
 		}
 		TestTrue(TEXT("Both players finish on their original board"), Rules.IsComplete());
+		if (Index == 2)
+		{
+			TestTrue(TEXT("The first visit cannot replace the later return"), bWaitedForReturnPrint);
+			TestTrue(TEXT("Both handoff slabs have been rewritten"),
+				Rules.GetTiles().FindChecked({8, 1}).bFreshPrint &&
+				Rules.GetTiles().FindChecked({8, 7}).bFreshPrint);
+		}
+		if (Index == 3) { TestEqual(TEXT("The same bridge makes an outward and return trip"), TurnCount, 2); }
 		// 直接搜索禁用转桥／回放／换位后的合法局面，检查同图里的机关依赖。
 		if (Index == 3 || Index == 4)
 		{
@@ -820,6 +863,7 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	AGridPuzzlePlayerController* Controller = World->SpawnActor<AGridPuzzlePlayerController>();
 	AGridManager* Manager = World->SpawnActor<AGridManager>();
 	Manager->bPlaySound = false;
+	Manager->bPlayMusic = false;
 	Manager->Levels.Append(AGridManager::CreateDefaultLevels());
 	Manager->Initialize(*Controller);
 	// 回响与引导预先标记已完成，测试过程只操作关内状态。
@@ -831,22 +875,31 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	Manager->LoadLevel(0);
 	Manager->SetScreen(EGridScreen::Playing);
 	World->GetTimerManager().Tick(0.f);
-	AGridTile* OriginalGoal = Manager->TileActors.FindRef({0, 0});
+	AGridTile* OriginalGoal = Manager->TileActors.FindRef({6, 1});
 	TestEqual(TEXT("Campaign map has one board"), Manager->GetSectionCount(), 1);
-	const TCHAR* Path[] = {TEXT("BU"), TEXT("BD"), TEXT("AR"), TEXT("AR"), TEXT("AR"), TEXT("AR"),
-		TEXT("AD"), TEXT("AD"), TEXT("AR"), TEXT("AR"), TEXT("AR"), TEXT("AR")};
+	const FText BeforeUnlockHint = Manager->GetLevelHint();
+	const FString BeforePreview = FGridTestSearch::StateKey(Manager->Rules);
+	Manager->ToggleMovePreview();
+	TestTrue(TEXT("Movement preview marks the current board"), !Manager->MovePreviewMarkers.IsEmpty());
+	TestEqual(TEXT("Movement preview preserves every rule state"),
+		FGridTestSearch::StateKey(Manager->Rules), BeforePreview);
+	Manager->SwitchCharacter();
+	TestTrue(TEXT("Changing players clears the movement preview"), Manager->MovePreviewMarkers.IsEmpty());
+	const TCHAR* Path[] = {TEXT("AR"), TEXT("AR"), TEXT("BL"), TEXT("BR"), TEXT("AR"), TEXT("AU")};
 	for (const TCHAR* Step : Path)
 	{
 		Manager->ActiveRole = Step[0] == 'A' ? Blue : Orange;
 		Manager->UnlockInputAt = 0.f;
-		Manager->Move(Step[1] == 'R' ? Right : Step[1] == 'U' ? Up : Down);
+		Manager->Move(Step[1] == 'R' ? Right : Step[1] == 'L' ? Left : Step[1] == 'U' ? Up : Down);
 	}
-	TestFalse(TEXT("Switch unlocks the far goal"), Manager->Rules.GetTiles().FindChecked({0, 0}).bIsLocked);
+	TestFalse(TEXT("Switch unlocks the far goal"), Manager->Rules.GetTiles().FindChecked({6, 1}).bIsLocked);
 	TestFalse(TEXT("Operating the switch does not finish the board"), Manager->Rules.IsComplete());
+	TestFalse(TEXT("Switch updates the situational hint"), Manager->GetLevelHint().EqualTo(BeforeUnlockHint));
 	Manager->UndoMove();
-	TestTrue(TEXT("Undo restores the lock"), Manager->Rules.GetTiles().FindChecked({0, 0}).bIsLocked);
-	TestTrue(TEXT("The same goal actor remains on screen"), OriginalGoal && Manager->TileActors.FindRef({0, 0}) == OriginalGoal);
-	TestEqual(TEXT("Undo restores the board step count"), Manager->GetMoveCount(), 11);
+	TestTrue(TEXT("Undo restores the lock"), Manager->Rules.GetTiles().FindChecked({6, 1}).bIsLocked);
+	TestTrue(TEXT("Undo restores the previous hint"), Manager->GetLevelHint().EqualTo(BeforeUnlockHint));
+	TestTrue(TEXT("The same goal actor remains on screen"), OriginalGoal && Manager->TileActors.FindRef({6, 1}) == OriginalGoal);
+	TestEqual(TEXT("Undo restores the board step count"), Manager->GetMoveCount(), 5);
 	Manager->ResetLevel();
 	TestEqual(TEXT("Reset restarts whole chapter"), Manager->GetMoveCount(), 0);
 	TestFalse(TEXT("Reset clears undo history"), Manager->HasUndoMove());

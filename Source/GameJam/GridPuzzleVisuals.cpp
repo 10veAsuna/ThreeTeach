@@ -241,6 +241,10 @@ void AGridTile::AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Ma
 	GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
 		TargetOffset * .5f + FVector(0,0,-12), FVector(TargetOffset.Size() / 100.f,.017f,.018f),
 		FLinearColor(.14f,.41f,.51f), .42f, TargetOffset.Rotation());
+	// 沿寄送方向放置箭头，长距离连线和双向回信也可分辨去向。
+	GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
+		TargetOffset * .76f + FVector(0, 0, -10), FVector(.10f, .10f, .22f),
+		FLinearColor(.38f, .76f, .83f), .8f, FRotationMatrix::MakeFromZ(TargetOffset).Rotator());
 }
 
 // 更新条件读数与连线高亮，显示桥当前还缺哪些角色或印记。

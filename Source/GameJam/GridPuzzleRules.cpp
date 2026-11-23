@@ -212,7 +212,11 @@ bool FGridPuzzleRules::InitializePrototype(const UGridLevelDataAsset& Level)
 			const FIntPoint Offset = Start - Level.TurnPivot;
 			bClockwise &= End - Level.TurnPivot == FIntPoint(-Offset.Y, Offset.X);
 			bCounterclockwise &= End - Level.TurnPivot == FIntPoint(Offset.Y, -Offset.X);
-			if (!IsMemory(Start) || Tiles.FindChecked(Start).bPrintReceiver || InitialDeck.Contains(Start) ||
+			// 发件碑可以固定在某个朝向的桥槽上，只有桥面回到这里并落脚时才触发。
+			// 接收端继续要求固定地面，避免寄印落入隐藏槽位后随转桥丢失。
+			const FTileData* StartTile = Tiles.Find(Start);
+			if (!StartTile || StartTile->TileType != ETileType::Memory ||
+				StartTile->bPrintReceiver || InitialDeck.Contains(Start) ||
 				Tiles.Contains(End) || (!bClockwise && !bCounterclockwise) ||
 				End.X < 0 || End.Y < 0 || End.X >= Size.X || End.Y >= Size.Y) { return false; }
 			Tiles.FindChecked(Start).InteractionLabel = TEXT("TURN");
@@ -272,6 +276,7 @@ FGridMove FGridPuzzleRules::TryMove(EPlayerRole Role, FIntPoint Direction)
 	FGridMove Move = MoveWithTerrain(Role, Direction, false);
 	if (Move.Result == EGridMoveResult::Moved && bRecording && Role == EPlayerRole::PlayerA)
 	{
+		Move.bRecordedStep = true;
 		Recording.Add(Direction);
 		bRecording = Recording.Num() < RecordedLength;
 	}
@@ -284,6 +289,7 @@ FGridMove FGridPuzzleRules::MoveWithTerrain(EPlayerRole Role, FIntPoint Directio
 	FGridMove Move = MoveCharacter(Role, Direction, bReplaying);
 	if (Move.Result == EGridMoveResult::Moved)
 	{
+		Move.bReplayStep = bReplaying;
 		Move.Path.Add(Move.To);
 		Move.BorrowedPrintCount = Move.bFootprintTransferred ? 1 : 0;
 		// 冰面逐格借印，下一格不合法时停在最后一个合法落点。
@@ -294,6 +300,9 @@ FGridMove FGridPuzzleRules::MoveWithTerrain(EPlayerRole Role, FIntPoint Directio
 			Move.To = Step.To;
 			Move.Path.Add(Step.To);
 			Move.BorrowedPrintCount += Step.bFootprintTransferred ? 1 : 0;
+			Move.FreshBorrowedPrintCount += Step.FreshBorrowedPrintCount;
+			Move.PrintDispatches.Append(Step.PrintDispatches);
+			Move.PrintArrivals.Append(Step.PrintArrivals);
 			Move.bFootprintTransferred |= Step.bFootprintTransferred;
 			for (FIntPoint Position : Step.ChangedTiles) { Move.ChangedTiles.AddUnique(Position); }
 			Move.bSwitchActivated |= Step.bSwitchActivated;
@@ -419,6 +428,7 @@ bool FGridPuzzleRules::TrySwap(EPlayerRole Role, FGridMove& Move)
 	Move.To = Positions[RoleSlot];
 	Move.Result = EGridMoveResult::Moved;
 	Move.bFootprintTransferred = true;
+	Move.FreshBorrowedPrintCount = 2;
 	Move.ChangedTiles = { Move.From, Move.To };
 	Swap(Blue.FootprintOwner, Orange.FootprintOwner);
 	++MoveCount;
@@ -530,6 +540,7 @@ FGridMove FGridPuzzleRules::MoveCharacter(EPlayerRole Role, FIntPoint Direction,
 	if (Destination->HasFootprints())
 	{
 		Move.bFootprintTransferred = Destination->FootprintOwner != EFootprintOwner::None;
+		Move.FreshBorrowedPrintCount = Destination->bFreshPrint ? 1 : 0;
 		Destination->FootprintOwner = Owner;
 		Destination->bFreshPrint = true;
 	}
@@ -611,13 +622,14 @@ bool FGridPuzzleRules::ArePrintTargetsFree(const TArray<FPrintWrite>& Writes) co
 }
 
 // 寄印写回目标格，并把变化记录交给表现层刷新颜色。
-void FGridPuzzleRules::ApplyPrintWrites(const TArray<FPrintWrite>& Writes, FGridMove& Move)
+void FGridPuzzleRules::ApplyPrintWrites(const TArray<FPrintWrite>& Writes, FGridMove& Move, FIntPoint From)
 {
 	for (const FPrintWrite& Write : Writes)
 	{
 		FTileData& Target = Tiles.FindChecked(Write.Target);
 		Target.FootprintOwner = Write.Owner;
 		Target.bFreshPrint = Write.bFresh;
+		Move.PrintArrivals.Add({From, Write.Target, Write.Owner});
 		Move.ChangedTiles.AddUnique(Write.Target);
 	}
 	Move.bSentPrint = true;
@@ -632,7 +644,7 @@ void FGridPuzzleRules::UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner
 		Pending.Steps = FMath::Max(0, Pending.Steps - 1);
 		if (Pending.Steps == 0 && ArePrintTargetsFree(Pending.Writes))
 		{
-			ApplyPrintWrites(Pending.Writes, Move);
+			ApplyPrintWrites(Pending.Writes, Move, PrintEffects[Pending.EffectIndex].Trigger);
 			PendingPrints.RemoveAt(Index);
 		}
 		else
@@ -667,6 +679,10 @@ void FGridPuzzleRules::UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner
 			Writes.Add({Link.Target, Source.FootprintOwner, Source.bFreshPrint});
 		}
 		if (Writes.IsEmpty()) { continue; }
+		for (const FPrintWrite& Write : Writes)
+		{
+			Move.PrintDispatches.Add({Effect.Trigger, Write.Target, Write.Owner});
+		}
 
 		// 搬运在发件时清除源印，副本与源印都包含在同一份可撤销状态中。
 		if (Effect.bMovePrint)
@@ -682,7 +698,7 @@ void FGridPuzzleRules::UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner
 		if (Effect.bOnce) { UsedPrintEffects.Add(Index); }
 		if (Effect.DelayMoves == 0 && ArePrintTargetsFree(Writes))
 		{
-			ApplyPrintWrites(Writes, Move);
+			ApplyPrintWrites(Writes, Move, Effect.Trigger);
 		}
 		else
 		{

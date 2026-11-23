@@ -179,6 +179,14 @@ enum class EGridMoveResult : uint8
 	CrateBlocked, RhythmClosed, PatrolBlocked
 };
 
+// 实际寄印的发件位置、落点与颜色，表现层据此生成对应的声场反馈。
+struct FGridPrintTransfer
+{
+	FIntPoint From;
+	FIntPoint To;
+	EFootprintOwner Owner;
+};
+
 // 单次行动的结果。ChangedTiles 包括落脚之外受倒计时、寄印、开关影响的所有格子。
 struct FGridMove
 {
@@ -192,6 +200,11 @@ struct FGridMove
 	bool bSentPrint = false;
 	TArray<FIntPoint> Path;
 	int32 BorrowedPrintCount = 0;
+	int32 FreshBorrowedPrintCount = 0;
+	bool bRecordedStep = false;
+	bool bReplayStep = false;
+	TArray<FGridPrintTransfer> PrintDispatches;
+	TArray<FGridPrintTransfer> PrintArrivals;
 };
 
 // 可按值复制的规则状态，供正常移动、机关预览、撤销和自动化测试共用。
@@ -252,7 +265,7 @@ private:
 	FGridMove MoveCharacter(EPlayerRole Role, FIntPoint Direction, bool bReplaying);
 	void ResolveStep(FGridMove& Move, EFootprintOwner Owner);
 	bool ArePrintTargetsFree(const TArray<FPrintWrite>& Writes) const;
-	void ApplyPrintWrites(const TArray<FPrintWrite>& Writes, FGridMove& Move);
+	void ApplyPrintWrites(const TArray<FPrintWrite>& Writes, FGridMove& Move, FIntPoint From);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	friend struct FGridTestSearch;

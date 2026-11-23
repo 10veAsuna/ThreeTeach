@@ -33,7 +33,7 @@ def save(obj):
         raise RuntimeError(f'Could not save {obj.get_path_name()}')
 
 
-# V7 章资源直接保存一张可玩的棋盘。
+# V9 章资源直接保存一张可玩的棋盘。
 LEVEL_FIELDS = (
     'title', 'hint', 'rows', 'fragile_lifetime', 'bridges', 'print_effects',
     'require_borrowed_prints', 'challenge', 'prototype', 'turn_controls', 'turn_pivot',
@@ -51,7 +51,10 @@ def persist_level(default, name, folder):
     if not existed:
         for field in LEVEL_FIELDS:
             level.set_editor_property(field, default.get_editor_property(field))
-        save(level)
+    # 更新已有资源的文字，同时保留编辑器中调整过的棋盘和机关。
+    for field in ('title', 'hint'):
+        level.set_editor_property(field, default.get_editor_property(field))
+    save(level)
     return level
 
 def material():
@@ -85,7 +88,7 @@ def main():
         persist_level(default, f'DA_V6_Experiment{i:02}', 'Levels/V6/Experiments')
     chapters = []
     for i, default in enumerate(ue.GridManager.create_campaign_levels(), 1):
-        chapters.append(persist_level(default, f'DA_V7_Chapter{i:02}', 'Levels/V7'))
+        chapters.append(persist_level(default, f'DA_V9_Chapter{i:02}', 'Levels/V9'))
     if len(chapters) != 5:
         raise RuntimeError('Expected five chapters before updating BP_Board')
 

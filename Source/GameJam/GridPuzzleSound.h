@@ -6,4 +6,4 @@ class UObject;
 enum class EGridSound { Step, Print, Transfer, Reject, Switch, Collapse, Goal, Complete, Select, Bridge };
 
 // 按事件现场合成短音效，Context 用于找到播放声音的世界。
-void PlayGridSound(UObject* Context, EGridSound Sound);
+void PlayGridSound(UObject* Context, EGridSound Sound, float Volume = 1.f);

@@ -2,6 +2,7 @@
 
 #include "GridPuzzleScreen.h"
 #include "GridPuzzleSound.h"
+#include "GridPuzzleMusic.h"
 #include "GridPuzzleVisuals.h"
 #include "Algo/AllOf.h"
 #include "Camera/CameraActor.h"
@@ -51,6 +52,7 @@ namespace
 // C++ 默认类作为兜底，BP_Board 可以把它们替换成带美术配置的派生蓝图。
 AGridManager::AGridManager()
 {
+	Music = CreateDefaultSubobject<UGridMusicComponent>(TEXT("Music"));
 	TileClass = AGridTile::StaticClass();
 	CharacterClass = AGridPuzzleCharacter::StaticClass();
 }
@@ -88,10 +90,25 @@ void AGridManager::Initialize(APlayerController& Controller)
 	Player = &Controller;
 	// 老版 BP_Board 储存的是十四张旧图，V6 储存的是五组分区；两者都改用整图。
 	if (Levels.IsEmpty() || Levels.Num() == 14 ||
-		(Levels.Num() == 5 && Levels[0] && !Levels[0]->Sections.IsEmpty()))
+		(Levels.Num() == 5 && Levels[0] && (!Levels[0]->Sections.IsEmpty() ||
+		 Levels[0]->GetPathName().StartsWith(TEXT("/Game/OneStep/Levels/V7/")) ||
+		 Levels[0]->GetPathName().StartsWith(TEXT("/Game/OneStep/Levels/V8/")))))
 	{
 		Levels.Reset();
 		Levels.Append(CreateCampaignLevels());
+	}
+	// 已导入的关卡只更新文案，保留编辑器里调整过的棋盘和机关配置。
+	if (Levels.Num() == 5 && Levels[0] && Levels[0]->GetPathName().StartsWith(TEXT("/Game/")))
+	{
+		const auto CopyDefaults = CreateCampaignLevels();
+		for (int32 Index = 0; Index < Levels.Num(); ++Index)
+		{
+			if (Levels[Index] && CopyDefaults.IsValidIndex(Index))
+			{
+				Levels[Index]->Title = CopyDefaults[Index]->Title;
+				Levels[Index]->Hint = CopyDefaults[Index]->Hint;
+			}
+		}
 	}
 	// 第一个挑战关之前均为主线，追加的玩法试玩使用独立的索引区间。
 	const int32 FirstChallenge = Levels.IndexOfByPredicate([](const UGridLevelDataAsset* Level)
@@ -234,6 +251,7 @@ bool AGridManager::LoadLevel(int32 Index, int32 Section, bool bContinueChapter)
 		Outro = nullptr;
 	}
 	TileActors.Reset();
+	MovePreviewMarkers.Reset();
 	Characters.Reset();
 	if (!bContinueChapter) { UndoHistory.Reset(); ChapterMoveCount = 0; }
 	PreviewMarkers.Reset();
@@ -298,6 +316,12 @@ bool AGridManager::LoadLevel(int32 Index, int32 Section, bool bContinueChapter)
 	UpdateControl();
 	UpdateBridgeDisplays();
 	PositionCamera(false);
+	if (bPlayMusic)
+	{
+		Music->StartChapter(IsPrototype() ? 0 : LevelIndex, Rules.GetSize(), Data->RhythmTiles.IsEmpty() ? 0 : Rules.GetRhythmPeriod());
+		Music->SetVolume(IsMusicEnabled() ? MusicVolume : 0.f);
+	}
+	else { Music->StopMusic(); }
 	UE_LOG(LogTemp, Display, TEXT("Puzzle loaded: %d / %d, %d tiles"), GetLevelNumber(), GetLevelCount(), TileActors.Num());
 	return true;
 }
@@ -305,12 +329,14 @@ bool AGridManager::LoadLevel(int32 Index, int32 Section, bool bContinueChapter)
 // 界面切换同时更新暂停状态、鼠标输入模式与 Slate 根控件。
 void AGridManager::SetScreen(EGridScreen NewScreen)
 {
+	ClearMovePreview();
 	Screen = NewScreen == EGridScreen::Playing && bMechanicIntroPending ?
 		EGridScreen::MechanicIntro : NewScreen;
 	const bool bPaused = Screen == EGridScreen::Paused ||
 		Screen == EGridScreen::MechanicIntro ||
 		(Screen == EGridScreen::Controls && bControlsFromPause);
 	Player->SetPause(bPaused);
+	Music->SetMood(Screen != EGridScreen::Playing, Screen == EGridScreen::Complete || Screen == EGridScreen::Ending);
 	const bool bMenuInput = Screen != EGridScreen::Playing && Screen != EGridScreen::Transition;
 	Player->bShowMouseCursor = bMenuInput;
 	if (bMenuInput)
@@ -348,6 +374,7 @@ void AGridManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		Viewport->RemoveViewportWidgetContent(ViewportUI.ToSharedRef());
 	}
 	ViewportUI.Reset();
+	Music->StopMusic();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -460,7 +487,7 @@ bool AGridManager::TryCollectEchoAt(FIntPoint Position)
 	{
 		EchoTile->SetEchoAvailable(false, PaletteMaterial);
 	}
-	SetFeedback(FText::Format(LOCTEXT("EchoCollected", "发现回响 · {0}"), GetLevelEchoName(GetSourceLevelIndex())));
+	SetFeedback(FText::Format(LOCTEXT("EchoCollected", "找到回响：{0}"), GetLevelEchoName(GetSourceLevelIndex())));
 	PersistProgress();
 	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
 	return true;
@@ -473,7 +500,7 @@ void AGridManager::TogglePause()
 	if (Screen == EGridScreen::Playing && bActionPreview)
 	{
 		ClearActionPreview();
-		SetFeedback(LOCTEXT("PreviewCancelled", "已取消预览"));
+		SetFeedback(LOCTEXT("PreviewCancelled", "预览已取消"));
 		return;
 	}
 	switch (Screen)
@@ -485,6 +512,14 @@ void AGridManager::TogglePause()
 	case EGridScreen::Selection: ShowMenu(); break;
 	default: break;
 	}
+}
+
+void AGridManager::ToggleMusic()
+{
+	if (!bPlayMusic) { return; }
+	bMusicMuted = !bMusicMuted;
+	Music->SetVolume(IsMusicEnabled() ? MusicVolume : 0.f);
+	SetFeedback(IsMusicEnabled() ? LOCTEXT("MusicOn", "音乐已打开") : LOCTEXT("MusicOff", "音乐已关闭"));
 }
 
 void AGridManager::Exit()
@@ -499,7 +534,7 @@ void AGridManager::ResetLevel()
 	if (LoadLevel(LevelIndex))
 	{
 		SetScreen(EGridScreen::Playing);
-		SetFeedback(LOCTEXT("ResetDone", "已重置"));
+		SetFeedback(LOCTEXT("ResetDone", "回到起点了。"));
 	}
 }
 
@@ -512,10 +547,11 @@ void AGridManager::UndoMove()
 	ClearActionPreview();
 	if (!HasUndoMove())
 	{
-		if (Screen == EGridScreen::Playing) { SetFeedback(LOCTEXT("NothingToUndo", "还没有可以撤销的移动")); }
+		if (Screen == EGridScreen::Playing) { SetFeedback(LOCTEXT("NothingToUndo", "没有可以撤销的操作。")); }
 		return;
 	}
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
+	Music->CancelAccents();
 	GetWorldTimerManager().ClearTimer(ScreenTimer);
 	// 转桥方向与人物位置的差异决定此次恢复使用转桥、换位还是普通行走动画。
 	FUndoStep Step = UndoHistory.Pop(EAllowShrinking::No);
@@ -550,7 +586,7 @@ void AGridManager::UndoMove()
 	UpdateBridgeDisplays();
 	UpdateControl();
 	if (Screen != EGridScreen::Playing) { SetScreen(EGridScreen::Playing); }
-	SetFeedback(LOCTEXT("UndoDone", "已撤销上一步"));
+	SetFeedback(LOCTEXT("UndoDone", "退回上一步。"));
 	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
 }
 
@@ -596,10 +632,10 @@ FText AGridManager::GetClosedBridgeFeedback(FIntPoint Position) const
 		const FText Label = FText::FromString(Source.Marker);
 		const FText RequiredTraveler = FText::FromString(RoleLetter(Condition.RequiredRole));
 		Missing.Add(FText::Format(Source.TileType == ETileType::Plate ?
-			LOCTEXT("PlateNeeded", "{1} 站上踏板 {0}") : LOCTEXT("ImprintNeeded", "{0} 留下 {1} 的脚印"),
+			LOCTEXT("PlateNeeded", "让 {1} 站在 {0} 上") : LOCTEXT("ImprintNeeded", "{0} 上需要 {1} 的脚印"),
 			Label, RequiredTraveler));
 	}
-	return FText::Format(LOCTEXT("BridgeClosed", "{0} 桥需要：{1}"),
+	return FText::Format(LOCTEXT("BridgeClosed", "{0} 还没开：{1}"),
 		FText::FromString(Bridge.Marker), FText::Join(LOCTEXT("BridgeConditionSeparator", "　·　"), Missing));
 }
 
@@ -612,6 +648,7 @@ void AGridManager::SwitchCharacter()
 		ClearActionPreview();
 		Feedback = FText::GetEmpty();
 	}
+	ClearMovePreview();
 	ActiveRole = ActiveRole == EPlayerRole::PlayerA ? EPlayerRole::PlayerB : EPlayerRole::PlayerA;
 	UpdateControl();
 	if (bPlaySound) { PlayGridSound(this, EGridSound::Select); }
@@ -637,8 +674,70 @@ FText AGridManager::GetLevelTitle(int32 Index) const
 
 FText AGridManager::GetLevelHint() const
 {
-	return CurrentSection() ? CurrentSection()->Hint :
-		LOCTEXT("MissingLevel", "关卡数据未配置");
+	if (!CurrentSection()) { return LOCTEXT("MissingLevel", "这关没有加载成功。"); }
+	if (IsPrototype() || CampaignLevelCount != 5) { return CurrentSection()->Hint; }
+	const auto FootprintAt = [this](FIntPoint Position)
+	{
+		const FTileData* Tile = Rules.GetTiles().Find(Position);
+		return Tile ? Tile->FootprintOwner : EFootprintOwner::None;
+	};
+	switch (LevelIndex)
+	{
+	case 0:
+	{
+		const FTileData* Goal = Rules.GetTiles().Find({6, 1});
+		if (Goal && Goal->bIsLocked)
+		{
+			return LOCTEXT("SidePocketHint", "窄路上得让个人。先看看上面那一格。");
+		}
+		return LOCTEXT("ReturnFromPocketHint", "门开了。上面的人怎么下来？");
+	}
+	case 1:
+		if (FootprintAt({2, 0}) == EFootprintOwner::None)
+		{
+			return LOCTEXT("FragileHandoffHint", "有人站在碎石上时不会倒数。离开前，先让另一个人靠近。");
+		}
+		if (FootprintAt({2, 5}) == EFootprintOwner::None)
+		{
+			return LOCTEXT("IceReturnHint", "北边有橙色脚印了。A 滑过冰面，B 才能往下走。");
+		}
+		return LOCTEXT("BothExitsHint", "出口前的脚印都有了，各走各的那一边。");
+	case 2:
+		if (FootprintAt({8, 7}) == EFootprintOwner::None) { return CurrentSection()->Hint; }
+		if (FootprintAt({9, 7}) == EFootprintOwner::None)
+		{
+			return LOCTEXT("RevisitRelayHint", "南边收到脚印了。让开北边那块石板，等回信。");
+		}
+		return LOCTEXT("RelayFinishedHint", "再经过一次老地方，两边的出口就通了。");
+	case 3:
+		if (Rules.GetRecording().IsEmpty())
+		{
+			return LOCTEXT("PrepareRecordingHint", "B 要在对面照着走。先想好要录哪三个方向。");
+		}
+		if (FootprintAt({9, 5}) == EFootprintOwner::PlayerB &&
+			FootprintAt({10, 5}) == EFootprintOwner::None)
+		{
+			return LOCTEXT("ReturnBridgeHint", "B 离开桥了。把他留下的橙色脚印转回来。");
+		}
+		if (FootprintAt({10, 5}) != EFootprintOwner::None)
+		{
+			return LOCTEXT("FinalBridgeReplyHint", "B 再往前走一步，A 的回程就通了。");
+		}
+		return LOCTEXT("CarryBridgeHint", "先在桥上留下脚印，再下来转桥。");
+	case 4:
+	{
+		if (FootprintAt({5, 2}) == EFootprintOwner::None ||
+			FootprintAt({5, 6}) == EFootprintOwner::None) { return CurrentSection()->Hint; }
+		const FTileData* Bridge = Rules.GetTiles().Find({6, 2});
+		if (Bridge && Bridge->bFoldedAway)
+		{
+			return LOCTEXT("PatrolMeetingHint", "巡逻会经过路口。看好 NEXT，别让等着的人被碰到。");
+		}
+		return LOCTEXT("SavedPrintHint", "南边还存着一份橙色脚印。让 A 过去，把它送给 B。");
+	}
+	default:
+		return CurrentSection()->Hint;
+	}
 }
 
 int32 AGridManager::GetEarnedEchoCount() const
@@ -705,12 +804,12 @@ FText AGridManager::GetLevelEchoName(int32 Index) const
 {
 	switch (Index)
 	{
-	case 0: return LOCTEXT("Echo01", "初见回响");
-	case 4: return LOCTEXT("Echo05", "脆石回声");
-	case 6: return LOCTEXT("Echo07", "两印之间");
-	case 9: return LOCTEXT("Echo10", "岔路回声");
-	case 12: return LOCTEXT("Echo13", "旧路藏声");
-	case 13: return LOCTEXT("Echo14", "岸边迟信");
+	case 0: return LOCTEXT("Echo01", "初见");
+	case 4: return LOCTEXT("Echo05", "薄冰");
+	case 6: return LOCTEXT("Echo07", "来信");
+	case 9: return LOCTEXT("Echo10", "岔路");
+	case 12: return LOCTEXT("Echo13", "旧脚印");
+	case 13: return LOCTEXT("Echo14", "晚到的信");
 	default: return FText::GetEmpty();
 	}
 }
@@ -719,17 +818,17 @@ FText AGridManager::GetMechanicIntroTitle() const
 {
 	switch (GetSourceLevelIndex())
 	{
-	case 0: return LOCTEXT("IntroTitle01", "借同伴的脚印");
-	case 2: return LOCTEXT("IntroTitle03", "开关与锁定终点");
-	case 4: return LOCTEXT("IntroTitle05", "脆弱石板");
-	case 5: return LOCTEXT("IntroTitle06", "TURN · 转动桥面");
-	case 6: return LOCTEXT("IntroTitle07", "OUT 与 IN · 寄送脚印");
-	case 7: return LOCTEXT("IntroTitle08", "REC 与 PLAY · 录印回放");
-	case 8: return LOCTEXT("IntroTitle09", "一次性印板");
-	case 10: return LOCTEXT("IntroTitle11", "保存拓本");
-	case 11: return LOCTEXT("IntroTitle12", "SWAP 与 TURN · 交班");
-	case 12: return LOCTEXT("IntroTitle13", "旧印复原");
-	case 13: return LOCTEXT("IntroTitle14", "延迟寄印");
+	case 0: return LOCTEXT("IntroTitle01", "踩对方的脚印");
+	case 2: return LOCTEXT("IntroTitle03", "开关和出口");
+	case 4: return LOCTEXT("IntroTitle05", "会碎的石板");
+	case 5: return LOCTEXT("IntroTitle06", "转桥");
+	case 6: return LOCTEXT("IntroTitle07", "传送脚印");
+	case 7: return LOCTEXT("IntroTitle08", "录制和回放");
+	case 8: return LOCTEXT("IntroTitle09", "只能走一次");
+	case 10: return LOCTEXT("IntroTitle11", "留一份脚印");
+	case 11: return LOCTEXT("IntroTitle12", "换位置，再转桥");
+	case 12: return LOCTEXT("IntroTitle13", "找回旧脚印");
+	case 13: return LOCTEXT("IntroTitle14", "晚几步送到");
 	default: return FText::GetEmpty();
 	}
 }
@@ -740,38 +839,27 @@ FText AGridManager::GetMechanicIntroBody() const
 	switch (GetSourceLevelIndex())
 	{
 	case 0:
-		return LOCTEXT("IntroBody01",
-			"你不能踩自己刚留下的脚印，但可以踩同伴的脚印。踩上去时，这格会变成你的颜色，并留给同伴继续借。\n按 Tab 切换当前角色；角色切换本身不计步。");
+		return LOCTEXT("IntroBody01", "A 只能踩橙色脚印，B 只能踩蓝色脚印。走过以后，这格就变成自己的颜色，留给另一个人走。\n按 Tab 换人。换人不算步数。");
 	case 2:
-		return LOCTEXT("IntroBody03",
-			"带锁终点只允许对应角色进入，并需要同色的开关先被踩亮。开关启动后，锁会在本局一直保持打开。\n终点上的小旗和字母标出它属于 A 还是 B。");
+		return LOCTEXT("IntroBody03", "A 走蓝色出口，B 走橙色出口。有锁的门要先踩开关，开了就不会再关上。\n开关上写着 A 或 B，要由对应的人去踩。");
 	case 4:
-		return LOCTEXT("IntroBody05",
-			"脆弱石板上的橙色竖条表示剩余借用次数。有人站住时倒计时暂停；离开后，每次成功移动都会让它减少一格。\n只剩最后一格时会闪烁，此时仍能接手。成功换上自己的脚印会恢复本关寿命。");
+		return LOCTEXT("IntroBody05", "石板旁的短条是剩余步数。人离开后，接下来的每次成功移动都会让它少一格。\n有人站在上面时不会倒数。另一个人及时踩上去，步数就会补满。");
 	case 5:
-		return LOCTEXT("IntroBody06",
-			"站上 TURN 碑按 E，可以预览桥面转动后的落点，再按 E 确认。桥上的脚印会跟着石板一起转过去。\n确认前两人都必须离开当前桥面；桥上有人时不能转桥。");
+		return LOCTEXT("IntroBody06", "站在 TURN 处按 E 看转动后的位置，再按 E 转桥。桥上的脚印会跟着一起过去。\n两个人都离开桥面，桥才能转。");
 	case 6:
-		return LOCTEXT("IntroBody07",
-			"OUT 是发件印板：角色踩上 OUT 的瞬间会读取连线来源的颜色，并寄给对应的 IN 印板。\nIN 是收件印板：它保留寄出瞬间的颜色；角色必须踩上这格才能借用，踩上后会改成自己的颜色。目标暂时被占用时显示 WAIT，等目标腾空后再送达。");
+		return LOCTEXT("IntroBody07", "踩上 OUT，会把连线另一端的 IN 变成来源脚印的颜色。踩过 IN 后，照常留下自己的脚印。\nIN 还是空的就不能走。显示 WAIT 时，脚印还没送到，或有人占着接收的位置。");
 	case 7:
-		return LOCTEXT("IntroBody08",
-			"A 站上 REC 按 E 开始录制，之后三次成功移动会成为方向和节奏。B 站上 PLAY 按 E 可以先预览整段路线，再确认回放。\n被拒绝的移动不会录入；回放要求每一步都能借到 A 的蓝色脚印。切换角色不会打断已经录下的内容。");
+		return LOCTEXT("IntroBody08", "A 在 REC 处按 E，录下接下来走的三个方向。B 到 PLAY 处按 E 预览，再按 E 照着走。\n回放的每一格都要有 A 的蓝色脚印。走不了的步子不会录进去。");
 	case 8:
-		return LOCTEXT("IntroBody09",
-			"标着 1 的印板只能消费一次。站上去时它还完整，离开后会立即坍塌，不能再回来。\n决定由谁先用、何时离开，是这一关的核心。");
+		return LOCTEXT("IntroBody09", "标着 1 的石板，一离开就会塌。\n先看看后面还用不用回来。");
 	case 10:
-		return LOCTEXT("IntroBody11",
-			"第一块满足条件的印板会保存一份拓本；之后即使原印再次改色，保存下来的拓本仍保留当时的颜色。\n拓本是一次性记录，不能重复覆盖。看清哪一块是可继续改写的原印，哪一块是已经锁定的历史印。");
+		return LOCTEXT("IntroBody11", "有些石板会存下第一次收到的脚印。原来的颜色改了，存下的这一份还在。\n先留好后面要用的颜色。");
 	case 11:
-		return LOCTEXT("IntroBody12",
-			"让两人分别站上相邻的 SWAP 印板并按 E，可以一次交换位置。站在 TURN 碑上时，同一个 E 键用于转桥或换位。\n先预览落点，再确认；桥面和脚印会一起转向。");
+		return LOCTEXT("IntroBody12", "两个人分别走上相邻的 SWAP 石板。按一次 E 看位置，再按一次交换。\n站在 TURN 处也能按 E 转桥，桥面要先空出来。");
 	case 12:
-		return LOCTEXT("IntroBody13",
-			"旧印机关会记录某一刻的颜色，并在条件满足后把这份历史颜色复原到印板上。\n复原改变的是印板，不会移动角色。先安排两人的站位，再决定封存哪一枚印。");
+		return LOCTEXT("IntroBody13", "之前存下的颜色还能送回来。先看清来源，再踩传送脚印的石板。\n换的是脚印颜色，两个人的位置不会变。");
 	case 13:
-		return LOCTEXT("IntroBody14",
-			"延迟送印不会立刻改变 IN 印板。触发后要等三次成功移动，脚印才会抵达；期间 IN 会以 WAIT 闪烁。\n换角色不会重置倒计时，目标被占用时也会等待。走路和交接可以同时推进送印。");
+		return LOCTEXT("IntroBody14", "这里的脚印要过三步才送到。倒数只算成功移动，Tab 换人不会影响它。\nIN 上有人时会等他离开，再把脚印送过去。");
 	default:
 		return FText::GetEmpty();
 	}
@@ -781,17 +869,17 @@ FText AGridManager::GetMechanicIntroExample() const
 {
 	switch (GetSourceLevelIndex())
 	{
-	case 0: return LOCTEXT("IntroExample01", "A 走过一格留下蓝印 → Tab 切到 B → B 借这枚蓝印前进");
-	case 2: return LOCTEXT("IntroExample03", "让标记对应的角色踩亮开关 → 再去自己的锁门终点");
-	case 4: return LOCTEXT("IntroExample05", "先靠近石板 → 让原主人离开 → 在下一次或最后一次计数内接手");
-	case 5: return LOCTEXT("IntroExample06", "站上 TURN 按 E 预览 → 确认两人都在桥外 → 再按 E 转向");
-	case 6: return LOCTEXT("IntroExample07", "角色踩上 OUT → 颜色沿连线抵达 IN → 另一角色走到 IN 借用");
-	case 7: return LOCTEXT("IntroExample08", "A 在 REC 开始录印 → 走三步并让开 → B 在 PLAY 预览并回放");
-	case 8: return LOCTEXT("IntroExample09", "需要回程时不要先走一次性印板 → 让真正要离开的人最后消费它");
-	case 10: return LOCTEXT("IntroExample11", "先用要求的颜色保存拓本 → 之后再安全改掉原印");
-	case 11: return LOCTEXT("IntroExample12", "两人站上相邻 SWAP 印板 → 按 E 预览换位 → 再按 E 同时迈步");
-	case 12: return LOCTEXT("IntroExample13", "先封存同伴需要的颜色 → 等两人站位完成 → 再触发复原");
-	case 13: return LOCTEXT("IntroExample14", "踩上寄印触发点 → 三次成功移动内走向 IN → 接住随后出现的颜色");
+	case 0: return LOCTEXT("IntroExample01", "A 先走过去。等他让开，换 B 踩蓝色脚印。");
+	case 2: return LOCTEXT("IntroExample03", "踩亮对应的开关，门就开了。");
+	case 4: return LOCTEXT("IntroExample05", "石板闪了也还能走，别再多耽误一步。");
+	case 5: return LOCTEXT("IntroExample06", "E 看位置，再按 E 转桥。Esc 取消。");
+	case 6: return LOCTEXT("IntroExample07", "OUT 是发出的一端，沿连线找到 IN。");
+	case 7: return LOCTEXT("IntroExample08", "A 录三步，B 照着走。");
+	case 8: return LOCTEXT("IntroExample09", "离开前，确认另一个人已经过来了。");
+	case 10: return LOCTEXT("IntroExample11", "原来的脚印还会变，先存下要用的那一份。");
+	case 11: return LOCTEXT("IntroExample12", "先分别走上两块 SWAP，再按 E。");
+	case 12: return LOCTEXT("IntroExample13", "看好存下的颜色和它要送去的地方。");
+	case 13: return LOCTEXT("IntroExample14", "等脚印送来的时候，也可以去准备别的路。");
 	default: return FText::GetEmpty();
 	}
 }
@@ -803,7 +891,7 @@ FText AGridManager::GetRecordingStatus() const
 	if (!CurrentSection()->RhythmTiles.IsEmpty() &&
 		(CurrentSection()->Prototype != EGridPrototype::RecordRoute || (!Rules.IsRecording() && Rules.GetRecording().IsEmpty())))
 	{
-		return FText::Format(LOCTEXT("RhythmStatus", "下一次落脚 · 第 {0}/{1} 拍  |  BEAT WAIT 时请同伴让拍"),
+		return FText::Format(LOCTEXT("RhythmStatus", "下一步：第 {0}/{1} 拍。BEAT 显示 WAIT 时过不去。"),
 			FText::AsNumber((Rules.GetMoveCount() + 1) % Rules.GetRhythmPeriod() + 1), FText::AsNumber(Rules.GetRhythmPeriod()));
 	}
 	if (CurrentSection()->Prototype != EGridPrototype::RecordRoute) { return FText::GetEmpty(); }
@@ -816,13 +904,77 @@ FText AGridManager::GetRecordingStatus() const
 		Sequence += DirectionGlyph(Direction);
 	}
 	return FText::Format(LOCTEXT("RecordingStatus", "{0}  {1}/3    {2}"),
-		Rules.IsRecording() ? LOCTEXT("Recording", "录印中") : LOCTEXT("Recorded", "已录印"),
+		Rules.IsRecording() ? LOCTEXT("Recording", "正在录制") : LOCTEXT("Recorded", "已录下"),
 		FText::AsNumber(Directions.Num()), FText::FromString(Sequence));
+}
+
+// H 在副本中执行四个方向的完整行动，冰面上的每一步也使用真实的脚印和时钟规则。
+void AGridManager::ToggleMovePreview()
+{
+	if (Screen != EGridScreen::Playing || bApplyingMove || !ReplaySteps.IsEmpty() ||
+		GetWorld()->GetTimeSeconds() < UnlockInputAt) { return; }
+	if (!MovePreviewMarkers.IsEmpty())
+	{
+		ClearMovePreview();
+		return;
+	}
+	ClearActionPreview();
+	const FIntPoint Directions[] = {{0, -1}, {-1, 0}, {0, 1}, {1, 0}};
+	const TCHAR* Keys[] = {TEXT("W"), TEXT("A"), TEXT("S"), TEXT("D")};
+	TMap<FIntPoint, FString> Labels;
+	TSet<FIntPoint> Legal;
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Directions); ++Index)
+	{
+		FGridPuzzleRules Trial = Rules;
+		const FGridMove Step = Trial.TryMove(ActiveRole, Directions[Index]);
+		if (Step.Result != EGridMoveResult::Moved)
+		{
+			if (!Legal.Contains(Step.To))
+			{
+				Labels.FindOrAdd(Step.To) = FString(Keys[Index]) + TEXT(" X");
+			}
+			continue;
+		}
+		for (int32 Landing = 0; Landing < Step.Path.Num(); ++Landing)
+		{
+			const FIntPoint Position = Step.Path[Landing];
+			FString& Label = Labels.FindOrAdd(Position);
+			if (!Legal.Contains(Position)) { Label.Reset(); }
+			if (!Label.IsEmpty()) { Label += TEXT(" / "); }
+			Label += FString::Printf(TEXT("%s%d"), Keys[Index], Landing + 1);
+			Legal.Add(Position);
+		}
+	}
+	for (const auto& Pair : Labels)
+	{
+		if (AGridTile* Tile = TileActors.FindRef(Pair.Key))
+		{
+			Tile->ShowActionMarker(FText::FromString(Pair.Value),
+				Legal.Contains(Pair.Key) ? FColor(112, 231, 181) : FColor(245, 116, 104));
+			MovePreviewMarkers.Add(Pair.Key);
+		}
+	}
+	SetFeedback(Legal.IsEmpty() ?
+		LOCTEXT("NoLegalStep", "这边暂时走不动。看看脚下的机关，或按 Tab 换人、Z 撤销。") :
+		LOCTEXT("MovePreviewHelp", "数字是落脚顺序，红色 X 表示走不了。"));
+}
+
+void AGridManager::ClearMovePreview()
+{
+	for (FIntPoint Position : MovePreviewMarkers)
+	{
+		if (AGridTile* Tile = TileActors.FindRef(Position))
+		{
+			Tile->ShowActionMarker(FText::GetEmpty(), FColor::White);
+		}
+	}
+	MovePreviewMarkers.Reset();
 }
 
 // 清除只用于预览的编号和颜色标记，实际地块状态从 Rules 恢复。
 void AGridManager::ClearActionPreview()
 {
+	ClearMovePreview();
 	for (FIntPoint Position : PreviewMarkers)
 	{
 		TileActors.FindChecked(Position)->ShowActionMarker(FText::GetEmpty(), FColor::White);
@@ -859,6 +1011,7 @@ void AGridManager::UseAction()
 	if (Screen != EGridScreen::Playing || !HasLevelAction() || bApplyingMove || !ReplaySteps.IsEmpty() ||
 		GetWorld()->GetTimeSeconds() < UnlockInputAt) { return; }
 	TGuardValue<bool> ApplyingMove(bApplyingMove, true);
+	ClearMovePreview();
 	FGridPuzzleRules Trial = Rules;
 	EGridPrototype Interaction = CurrentSection()->Prototype;
 	// 组合机关优先执行已满足的换位，尚不能换位时允许在 TURN 控制格转桥。
@@ -880,7 +1033,7 @@ void AGridManager::UseAction()
 		TArray<FIntPoint> Changed;
 		if (!Trial.TryTurnBridge(ActiveRole, Changed))
 		{
-			SetFeedback(LOCTEXT("CannotTurn", "站上 TURN 碑，并让两人都离开桥面"));
+			SetFeedback(LOCTEXT("CannotTurn", "站到 TURN 处，两个人都离开桥面后才能转。"));
 			return;
 		}
 		if (!bActionPreview)
@@ -893,7 +1046,7 @@ void AGridManager::UseAction()
 					FColor(124,220,255) : PrintOwner == EFootprintOwner::PlayerB ? FColor(255,186,123) : FColor::White);
 			}
 			bActionPreview = true;
-			SetFeedback(LOCTEXT("TurnPreview", "标记是转桥后的落点。再按 E 转桥，Esc 取消"));
+			SetFeedback(LOCTEXT("TurnPreview", "再按 E 转桥，Esc 取消。"));
 			return;
 		}
 		ClearActionPreview();
@@ -904,7 +1057,7 @@ void AGridManager::UseAction()
 		ApplyTileUpdates(Changed, false, bCollapsed, bBridgeChanged);
 		AnimateTurnedDeck(Changed, false);
 		UnlockInputAt = GetWorld()->GetTimeSeconds() + DeckTime;
-		SetFeedback(LOCTEXT("TurnDone", "桥面和脚印已一起转向"));
+		SetFeedback(LOCTEXT("TurnDone", "桥转好了。"));
 		if (bPlaySound) { PlayGridSound(this, EGridSound::Bridge); }
 		return;
 	}
@@ -914,12 +1067,12 @@ void AGridManager::UseAction()
 		{
 			SaveUndo(MoveTemp(Rules), ActiveRole, {});
 			Rules = MoveTemp(Trial);
-			SetFeedback(LOCTEXT("RecordStarted", "已开始录印。记录 A 接下来的三次成功移动"));
+			SetFeedback(LOCTEXT("RecordStarted", "开始录制。记下 A 接下来走的三步。"));
 			return;
 		}
 		if (!Rules.CanReplayFrom(ActiveRole))
 		{
-			SetFeedback(LOCTEXT("NoRecording", "A 在 REC 录满三步，B 在 PLAY 回放"));
+			SetFeedback(LOCTEXT("NoRecording", "先让 A 在 REC 录满三步，再让 B 到 PLAY 回放。"));
 			return;
 		}
 		TArray<FGridMove> Steps;
@@ -937,15 +1090,15 @@ void AGridManager::UseAction()
 			bActionPreview = true;
 			if (bValid)
 			{
-				SetFeedback(LOCTEXT("ReplayPreview", "回放沿 1 → 2 → 3 前进。再按 E 执行，Esc 取消"));
+				SetFeedback(LOCTEXT("ReplayPreview", "按编号走三步。再按 E 回放，Esc 取消。"));
 			}
 			else
 			{
 				const EGridMoveResult Failure = Steps.Last().Result;
-				const FText Reason = Failure == EGridMoveResult::Occupied ? LOCTEXT("ReplayOccupied", "同伴还站在落点上") :
+				const FText Reason = Failure == EGridMoveResult::Occupied ? LOCTEXT("ReplayOccupied", "同伴还站在那里") :
 					(Failure == EGridMoveResult::Void || Failure == EGridMoveResult::ReplayOnly) ?
-					LOCTEXT("ReplayOutOfPath", "落点不在回放路段内") : LOCTEXT("ReplayNoPrint", "落点没有可借的蓝印");
-				SetFeedback(FText::Format(LOCTEXT("ReplayBlocked", "第 {0} 步无法回放。{1}"), FText::AsNumber(Steps.Num()), Reason));
+					LOCTEXT("ReplayOutOfPath", "这一步出了回放范围") : LOCTEXT("ReplayNoPrint", "这里没有可踩的蓝色脚印");
+				SetFeedback(FText::Format(LOCTEXT("ReplayBlocked", "第 {0} 步走不了：{1}。"), FText::AsNumber(Steps.Num()), Reason));
 			}
 			return;
 		}
@@ -968,7 +1121,7 @@ void AGridManager::UseAction()
 		FGridMove Move;
 		if (!Trial.TrySwap(ActiveRole, Move))
 		{
-			SetFeedback(LOCTEXT("CannotSwap", "让两人分别站上相邻的 SWAP 印板，各自留下自己的印"));
+			SetFeedback(LOCTEXT("CannotSwap", "先分别走上两块 SWAP 石板，再按 E。"));
 			return;
 		}
 		if (!bActionPreview)
@@ -976,7 +1129,7 @@ void AGridManager::UseAction()
 			MarkActionTile(Trial.GetPosition(EPlayerRole::PlayerA), FText::FromString(TEXT("A")), FColor(124,220,255));
 			MarkActionTile(Trial.GetPosition(EPlayerRole::PlayerB), FText::FromString(TEXT("B")), FColor(255,186,123));
 			bActionPreview = true;
-			SetFeedback(LOCTEXT("SwapPreview", "标记是两人的换位落点。再按 E 同时迈步，Esc 取消"));
+			SetFeedback(LOCTEXT("SwapPreview", "再按 E 换位置，Esc 取消。"));
 			return;
 		}
 		ClearActionPreview();
@@ -995,7 +1148,8 @@ void AGridManager::UseAction()
 		UpdateBridgeDisplays();
 		UpdateControl();
 		UnlockInputAt = GetWorld()->GetTimeSeconds() + SwapTime;
-		SetFeedback(LOCTEXT("SwapDone", "两人同时借到了同伴刚让出的脚印"));
+		Music->NotifyMove(ActiveRole, Move, false, Rules.GetMoveCount());
+		SetFeedback(LOCTEXT("SwapDone", "换好位置了。"));
 		TryCollectEchoAt(Rules.GetPosition(EPlayerRole::PlayerA));
 		TryCollectEchoAt(Rules.GetPosition(EPlayerRole::PlayerB));
 		if (bPlaySound) { PlayGridSound(this, EGridSound::Transfer); }
@@ -1016,7 +1170,7 @@ void AGridManager::PlayReplayStep()
 		ReplaySteps.Reset();
 		ReplayStates.Reset();
 		CheckCompletion();
-		SetFeedback(LOCTEXT("ReplayDone", "已接过同伴的三步"));
+		SetFeedback(LOCTEXT("ReplayDone", "三步走完了。"));
 		return;
 	}
 	GetWorldTimerManager().SetTimer(ReplayTimer, this, &AGridManager::PlayReplayStep, Duration, false);
@@ -1040,19 +1194,19 @@ void AGridManager::Move(FIntPoint Direction)
 		FText Reason;
 		switch (MoveResult.Result)
 		{
-		case EGridMoveResult::CrateBlocked: Reason = LOCTEXT("CrateBlocked", "箱子后面需要空闲印板，先给同伴让出推箱位置"); break;
-		case EGridMoveResult::RhythmClosed: Reason = LOCTEXT("RhythmClosed", "下一拍关门，让同伴先踩一步来让拍"); break;
-		case EGridMoveResult::PatrolBlocked: Reason = LOCTEXT("PatrolBlocked", "巡逻将经过这里，让另一人先沿脚印脱离危险"); break;
-		case EGridMoveResult::OwnFootprint: Reason = LOCTEXT("OwnPrint", "这是你留下的脚印，交给同伴吧"); break;
-		case EGridMoveResult::EmptyPrint: Reason = LOCTEXT("EmptyPrint", "这格还没有脚印，等同伴留下印记。"); break;
-		case EGridMoveResult::Occupied: Reason = LOCTEXT("Occupied", "同伴正站在这一格"); break;
-		case EGridMoveResult::Finished: Reason = LOCTEXT("Finished", "这个角色已抵达，按 Tab 切换"); break;
-		case EGridMoveResult::Collapsed: Reason = LOCTEXT("Collapsed", "石板已坍塌，可按 R 重来"); break;
-		case EGridMoveResult::LockedGoal: Reason = LOCTEXT("Locked", "先由标记对应的角色启动开关"); break;
+		case EGridMoveResult::CrateBlocked: Reason = LOCTEXT("CrateBlocked", "箱子后面没有空位。"); break;
+		case EGridMoveResult::RhythmClosed: Reason = LOCTEXT("RhythmClosed", "这一拍过不去，先换个人走。"); break;
+		case EGridMoveResult::PatrolBlocked: Reason = LOCTEXT("PatrolBlocked", "这一步会撞上巡逻，先让人离开危险位置。"); break;
+		case EGridMoveResult::OwnFootprint: Reason = LOCTEXT("OwnPrint", "自己的脚印不能踩。"); break;
+		case EGridMoveResult::EmptyPrint: Reason = LOCTEXT("EmptyPrint", "这里还没有脚印。"); break;
+		case EGridMoveResult::Occupied: Reason = LOCTEXT("Occupied", "同伴站在这里，先让一下。"); break;
+		case EGridMoveResult::Finished: Reason = LOCTEXT("Finished", "已经到出口了，按 Tab 换人。"); break;
+		case EGridMoveResult::Collapsed: Reason = LOCTEXT("Collapsed", "这块板已经塌了，按 Z 撤销。"); break;
+		case EGridMoveResult::LockedGoal: Reason = LOCTEXT("Locked", "门还没开，先找开关。"); break;
 		case EGridMoveResult::ClosedBridge: Reason = GetClosedBridgeFeedback(MoveResult.To); break;
-		case EGridMoveResult::OtherGoal: Reason = LOCTEXT("OtherGoal", "这是同伴的终点"); break;
-		case EGridMoveResult::ReplayOnly: Reason = LOCTEXT("ReplayOnly", "在 PLAY 碑按 E 预览并回放这段路"); break;
-		default: Reason = LOCTEXT("Blocked", "无法往这个方向移动"); break;
+		case EGridMoveResult::OtherGoal: Reason = LOCTEXT("OtherGoal", "这是另一个人的出口。"); break;
+		case EGridMoveResult::ReplayOnly: Reason = LOCTEXT("ReplayOnly", "这段路要站到 PLAY 上回放。"); break;
+		default: Reason = LOCTEXT("Blocked", "这边走不了。"); break;
 		}
 		SetFeedback(Reason);
 		if (!Rules.IsFinished(Mover))
@@ -1071,6 +1225,7 @@ void AGridManager::Move(FIntPoint Direction)
 // 将已经结算的规则结果转换成走路动画、地块刷新、事件通知与音效。
 void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 {
+	Music->NotifyMove(Mover, MoveResult, Rules.IsComplete(), Rules.GetMoveCount());
 	const float Duration = StepTime * FMath::Max(1, MoveResult.Path.Num());
 	UnlockInputAt = GetWorld()->GetTimeSeconds() + Duration;
 	Feedback = FText::GetEmpty();
@@ -1085,25 +1240,27 @@ void AGridManager::PresentMove(EPlayerRole Mover, const FGridMove& MoveResult)
 	if (MoveResult.bSwitchActivated)
 	{
 		OnSwitchActivated.Broadcast(Destination);
-		SetFeedback(LOCTEXT("Unlocked", "开关已启动，终点已解锁"));
+		SetFeedback(LOCTEXT("Unlocked", "门开了。"));
 	}
 	if (MoveResult.bReachedGoal && !Rules.IsComplete())
 	{
-		SetFeedback(LOCTEXT("OneArrived", "已抵达终点，按 Tab 继续帮助同伴"));
+		SetFeedback(LOCTEXT("OneArrived", "一个到了，按 Tab 换另一个人。"));
 	}
 	if (Destination.TileType == ETileType::Bridge && !Destination.bIsActivated)
 	{
-		SetFeedback(LOCTEXT("BridgeExit", "桥已合拢，仍可向相邻的石板离开。"));
+		SetFeedback(LOCTEXT("BridgeExit", "桥关了，站在上面的人还能走出去。"));
 	}
 	TryCollectEchoAt(MoveResult.To);
-	if (bPlaySound)
+	if (bPlaySound && !(MoveResult.bReachedGoal && IsMusicEnabled()))
 	{
 		EGridSound Sound = EGridSound::Step;
 		if (MoveResult.bReachedGoal) { Sound = EGridSound::Goal; }
 		else if (MoveResult.bSwitchActivated) { Sound = EGridSound::Switch; }
 		else if (MoveResult.bFootprintTransferred) { Sound = EGridSound::Transfer; }
 		else if (Destination.HasFootprints()) { Sound = EGridSound::Print; }
-		PlayGridSound(this, Sound);
+		// 大部分移动踩在脚印上，Step、Print、Transfer 都属于落脚声。
+		const bool bFootstep = Sound == EGridSound::Step || Sound == EGridSound::Print || Sound == EGridSound::Transfer;
+		PlayGridSound(this, Sound, bFootstep ? .45f : 1.f);
 		if (bCollapsed) { PlayGridSound(this, EGridSound::Collapse); }
 		if (bBridgeChanged) { PlayGridSound(this, EGridSound::Bridge); }
 		if (MoveResult.bSentPrint) { PlayGridSound(this, EGridSound::Bridge); }
@@ -1144,7 +1301,8 @@ void AGridManager::CheckCompletion()
 		SaveLevelProgress();
 		SetScreen(EGridScreen::Transition);
 		OnLevelCompleted.Broadcast();
-		if (bPlaySound) { PlayGridSound(this, EGridSound::Complete); }
+		Music->Complete();
+		if (bPlaySound && !IsMusicEnabled()) { PlayGridSound(this, EGridSound::Complete); }
 		GetWorldTimerManager().SetTimer(ScreenTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
 		{
 			SetScreen(EGridScreen::Complete);
@@ -1252,6 +1410,8 @@ void AGridPuzzlePlayerController::SetupInputComponent()
 	InputComponent->BindAction("GridLeft", IE_Pressed, this, &AGridPuzzlePlayerController::MoveLeft);
 	InputComponent->BindAction("GridRight", IE_Pressed, this, &AGridPuzzlePlayerController::MoveRight);
 	InputComponent->BindAction("GridSwitch", IE_Pressed, this, &AGridPuzzlePlayerController::Switch);
+	InputComponent->BindAction("GridMusic", IE_Pressed, this, &AGridPuzzlePlayerController::MuteMusic).bExecuteWhenPaused = true;
+	InputComponent->BindAction("GridPreview", IE_Pressed, this, &AGridPuzzlePlayerController::PreviewMoves);
 	InputComponent->BindAction("GridInteract", IE_Pressed, this, &AGridPuzzlePlayerController::Interact);
 	InputComponent->BindAction("GridUndo", IE_Pressed, this, &AGridPuzzlePlayerController::Undo).bExecuteWhenPaused = true;
 	InputComponent->BindAction("GridReset", IE_Pressed, this, &AGridPuzzlePlayerController::Reset).bExecuteWhenPaused = true;
@@ -1265,6 +1425,8 @@ void AGridPuzzlePlayerController::MoveDown() { if (Manager) { Manager->Move({0,1
 void AGridPuzzlePlayerController::MoveLeft() { if (Manager) { Manager->Move({-1,0}); } }
 void AGridPuzzlePlayerController::MoveRight() { if (Manager) { Manager->Move({1,0}); } }
 void AGridPuzzlePlayerController::Switch() { if (Manager) { Manager->SwitchCharacter(); } }
+void AGridPuzzlePlayerController::MuteMusic() { if (Manager) { Manager->ToggleMusic(); } }
+void AGridPuzzlePlayerController::PreviewMoves() { if (Manager) { Manager->ToggleMovePreview(); } }
 void AGridPuzzlePlayerController::Interact() { if (Manager) { Manager->UseAction(); } }
 void AGridPuzzlePlayerController::Undo() { if (Manager) { Manager->UndoMove(); } }
 void AGridPuzzlePlayerController::Reset() { if (Manager) { Manager->ResetLevel(); } }

@@ -13,6 +13,7 @@ class AGridTile;
 class AGridPuzzleCharacter;
 class UMaterialInterface;
 class SWidget;
+class UGridMusicComponent;
 
 // 菜单、引导、游玩、暂停、结算与结局共用一个界面状态，由 SetScreen 统一切换。
 enum class EGridScreen : uint8 { Menu, Selection, Controls, MechanicIntro, Playing, Paused, Transition, Complete, Ending };
@@ -53,6 +54,8 @@ public:
 	void SelectLevel(int32 Index);
 	void Advance();
 	void TogglePause();
+	void ToggleMovePreview();
+	void ToggleMusic();
 	void Exit();
 
 	// 默认关卡定义在 GridPuzzleChapters.cpp 中，Python 可据此生成可编辑的 Data Asset。
@@ -80,6 +83,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category="Look") TSubclassOf<AGridPuzzleCharacter> CharacterClass;
 	UPROPERTY(EditDefaultsOnly, Category="Look") TObjectPtr<UMaterialInterface> PaletteMaterial;
 	UPROPERTY(EditDefaultsOnly, Category="Sound") bool bPlaySound = true;
+	UPROPERTY(EditDefaultsOnly, Category="Sound") bool bPlayMusic = true;
+	UPROPERTY(EditDefaultsOnly, Category="Sound", meta=(ClampMin="0", ClampMax="1")) float MusicVolume = .65f;
+	bool IsMusicEnabled() const { return bPlayMusic && !bMusicMuted && MusicVolume > 0.f; }
 
 	EGridScreen GetScreen() const { return Screen; }
 	int32 GetLevelNumber() const { return LevelIndex + 1; }
@@ -141,9 +147,12 @@ private:
 	void UpdateControl();
 	void UpdateBridgeDisplays();
 	void PresentMove(EPlayerRole Mover, const FGridMove& MoveResult);
+	UPROPERTY() TObjectPtr<UGridMusicComponent> Music;
+	bool bMusicMuted = false;
 	void ApplyTileUpdates(const TArray<FIntPoint>& Positions, bool bPulse, bool& bCollapsed, bool& bBridgeChanged);
 	void CheckCompletion();
 	void ClearActionPreview();
+	void ClearMovePreview();
 	void MarkActionTile(FIntPoint Position, FText Label, FColor Color);
 	void PlayReplayStep();
 	void AnimateTurnedDeck(const TArray<FIntPoint>& ChangedTiles, bool bReverse);
@@ -174,6 +183,7 @@ private:
 	FGridPuzzleRules Rules;
 	TArray<FUndoStep> UndoHistory;
 	TArray<FIntPoint> PreviewMarkers;
+	TArray<FIntPoint> MovePreviewMarkers;
 	TArray<FGridMove> ReplaySteps;
 	TArray<FGridPuzzleRules> ReplayStates;
 	FText Feedback;
@@ -223,6 +233,8 @@ private:
 	void MoveRight();
 	void Switch();
 	void Interact();
+	void PreviewMoves();
+	void MuteMusic();
 	void Undo();
 	void Reset();
 	void PauseOrBack();

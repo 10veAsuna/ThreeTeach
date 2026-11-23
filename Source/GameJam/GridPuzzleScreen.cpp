@@ -80,13 +80,13 @@ namespace
 	{
 		return SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,14)
-			[Text(LOCTEXT("Theme", "GAME JAM   /   同行"), 16, Blue)]
+			[Text(LOCTEXT("Theme", "同行"), 16, Blue)]
 			+ SVerticalBox::Slot().AutoHeight()
 			[Text(LOCTEXT("Title", "借我一步"), 84)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(6,0,0,34)
-			[Text(LOCTEXT("Subtitle", "O N E   S T E P   F O R   Y O U"), 17, Muted, true)]
+			[Text(LOCTEXT("Subtitle", "ONE STEP FOR YOU"), 17, Muted, true)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,32)
-			[Text(LOCTEXT("Intro", "你无法走在自己留下的路上。\n所以，我把每一步都留给你。"), 20, Muted)]
+			[Text(LOCTEXT("Intro", "你先走，我跟上。"), 20, Muted)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(5,0,0,22)
 			[Text(FText::Format(LOCTEXT("EchoProgress", "回响  {0} / {1}"),
 				FText::AsNumber(Manager.GetEarnedEchoCount()), FText::AsNumber(Manager.GetEchoTargetCount())),
@@ -100,9 +100,9 @@ namespace
 				]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
-			[Button(LOCTEXT("Select", "选择关卡"), &Manager, &AGridManager::ShowSelection)]
+			[Button(LOCTEXT("Select", "选关"), &Manager, &AGridManager::ShowSelection)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
-			[Button(LOCTEXT("Controls", "操作说明"), &Manager, &AGridManager::ShowControls)]
+			[Button(LOCTEXT("Controls", "怎么玩"), &Manager, &AGridManager::ShowControls)]
 			+ SVerticalBox::Slot().AutoHeight()
 			[Button(LOCTEXT("Exit", "退出游戏"), &Manager, &AGridManager::Exit)];
 	}
@@ -137,19 +137,19 @@ namespace
 
 		TSharedRef<SVerticalBox> Body = SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,16)
-			[Text(LOCTEXT("Select", "选择关卡"), 38)]
+			[Text(LOCTEXT("Select", "选关"), 38)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,14)
-			[Text(FText::Format(LOCTEXT("EchoSelection", "已找到回响：{0} / {1}"),
+			[Text(FText::Format(LOCTEXT("EchoSelection", "回响  {0} / {1}"),
 				FText::AsNumber(Manager.GetEarnedEchoCount()), FText::AsNumber(Manager.GetEchoTargetCount())),
 				16, Orange)]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0,0,0,8)
-			[Text(LOCTEXT("MainChapters", "主线"), 18, Blue)]
+			[Text(LOCTEXT("MainChapters", "章节"), 18, Blue)]
 			+ SVerticalBox::Slot().AutoHeight()[Chapters];
 		if (Manager.GetCampaignLevelCount() > Manager.GetMainLevelCount())
 		{
 			Body->AddSlot().AutoHeight().Padding(0,18,0,8)
 			[Text(Manager.AreChallengesUnlocked() ? LOCTEXT("Challenges", "挑战") :
-				LOCTEXT("LockedChallenges", "挑战 · 完成主线后解锁"), 18, Orange)];
+				LOCTEXT("LockedChallenges", "通关后解锁挑战"), 18, Orange)];
 			Body->AddSlot().AutoHeight()[Challenges];
 		}
 		TSharedRef<SUniformGridPanel> Prototypes = SNew(SUniformGridPanel).SlotPadding(FMargin(0,0,8,8));
@@ -158,10 +158,10 @@ namespace
 			const int32 Slot = Index - Manager.GetCampaignLevelCount();
 			Prototypes->AddSlot(Slot % 4, Slot / 4)[MakeLevelButton(Index)];
 		}
-		Body->AddSlot().AutoHeight().Padding(0,18,0,8)[Text(LOCTEXT("Prototypes", "玩法试玩"), 18, Blue)];
+		Body->AddSlot().AutoHeight().Padding(0,18,0,8)[Text(LOCTEXT("Prototypes", "试试机关"), 18, Blue)];
 		Body->AddSlot().AutoHeight()[Prototypes];
 		Body->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0,20,0,0)
-		[Button(LOCTEXT("MainMenu", "返回主菜单"), &Manager, &AGridManager::ShowMenu)];
+		[Button(LOCTEXT("MainMenu", "返回菜单"), &Manager, &AGridManager::ShowMenu)];
 		return Card(Body, Panel, FMargin(30,26));
 	}
 
@@ -186,8 +186,8 @@ namespace
 					SNew(STextBlock).Font(Font(16,false)).ColorAndOpacity(Muted).Text_Lambda([Manager,Role]()
 					{
 						if (!Manager.IsValid()) { return FText::GetEmpty(); }
-						if (Manager->IsFinished(Role)) { return LOCTEXT("Arrived", "已抵达"); }
-						return Manager->GetActiveRole() == Role ? LOCTEXT("Active", "当前控制") : LOCTEXT("Waiting", "等待");
+						if (Manager->IsFinished(Role)) { return LOCTEXT("Arrived", "已到达"); }
+						return Manager->GetActiveRole() == Role ? LOCTEXT("Active", "操作中") : LOCTEXT("Waiting", "等待");
 					})
 				]
 			]
@@ -198,9 +198,9 @@ namespace
 	void AddHUD(SOverlay& Layout, AGridManager& Manager)
 	{
 		const TWeakObjectPtr<AGridManager> Weak(&Manager);
-		const FText Chapter = Manager.IsPrototype() ? LOCTEXT("Prototypes", "玩法试玩") :
+		const FText Chapter = Manager.IsPrototype() ? LOCTEXT("Prototypes", "试试机关") :
 			Manager.IsChallenge() ? LOCTEXT("Challenges", "挑战") :
-			FText::Format(LOCTEXT("Chapter", "{0} / {1}"),
+			FText::Format(LOCTEXT("Chapter", "第 {0} 章 / 共 {1} 章"),
 				FText::AsNumber(Manager.GetLevelNumber()), FText::AsNumber(Manager.GetMainLevelCount()));
 		Layout.AddSlot().HAlign(HAlign_Fill).VAlign(VAlign_Top).Padding(32,27)
 		[
@@ -238,10 +238,13 @@ namespace
 				.Text_Lambda([Weak]() { return Weak.IsValid() ? Weak->GetFeedback() : FText::GetEmpty(); })
 			]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-			[Card(Text(Manager.GetLevelHint(), 18), Panel, FMargin(17,8))]
+			[Card(SNew(STextBlock).Font(Font(18, false)).ColorAndOpacity(Ink)
+				.WrapTextAt(1050.f)
+				.Text_Lambda([Weak]() { return Weak.IsValid() ? Weak->GetLevelHint() : FText::GetEmpty(); }),
+				Panel, FMargin(17,8))]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0,5,0,0)
-			[Text(Manager.HasLevelAction() ? LOCTEXT("PrototypeKeyBar", "WASD / 方向键  移动      Tab  切换      E  机关      Z  撤销      R  重置      Esc  返回") :
-				LOCTEXT("KeyBar", "WASD / 方向键  移动      Tab  切换      Z  撤销      R  重置      Esc  暂停"), 15, Muted)]
+			[Text(Manager.HasLevelAction() ? LOCTEXT("PrototypeKeyBar", "WASD 移动    Tab 换人    H 预览    E 机关    Z 撤销    R 重来    M 音乐    Esc 暂停") :
+				LOCTEXT("KeyBar", "WASD 移动    Tab 换人    H 预览    Z 撤销    R 重来    M 音乐    Esc 暂停"), 15, Muted)]
 		];
 		Layout.AddSlot().HAlign(HAlign_Right).VAlign(VAlign_Bottom).Padding(0,0,34,28)
 		[
@@ -280,7 +283,7 @@ namespace
 		switch (Manager.GetScreen())
 		{
 		case EGridScreen::MechanicIntro:
-			Heading(LOCTEXT("NewMechanic", "本关新机制"));
+			Heading(LOCTEXT("NewMechanic", "先看一下"));
 			Body->AddSlot().AutoHeight().Padding(0,0,0,10)
 			[
 				SNew(STextBlock).Font(Font(30,false)).ColorAndOpacity(Blue)
@@ -304,59 +307,55 @@ namespace
 				]
 			];
 			Body->AddSlot().AutoHeight().Padding(0,16,0,0)
-			[Button(LOCTEXT("EnterLevel", "明白了，开始本关"), &Manager, &AGridManager::DismissMechanicIntro, true)];
+			[Button(LOCTEXT("EnterLevel", "开始吧"), &Manager, &AGridManager::DismissMechanicIntro, true)];
 			break;
 		case EGridScreen::Controls:
-			Heading(LOCTEXT("ControlTitle", "操作说明"));
-			Row(LOCTEXT("Movement", "WASD / 方向键"), LOCTEXT("GridMovement", "每次移动一格"));
-			Row(LOCTEXT("SwitchKey", "Tab"), LOCTEXT("SwitchPlayer", "切换蓝色 A 和橙色 B"));
-			Row(LOCTEXT("InteractKey", "E"), LOCTEXT("InteractHelp", "在标记处录印、预览或确认机关"));
-			Row(LOCTEXT("UndoKey", "Z / Ctrl+Z"), LOCTEXT("UndoHelp", "撤销上一次成功移动，可连续撤销"));
-			Row(LOCTEXT("ResetKey", "R"), LOCTEXT("ResetHelp", "重置本关"));
-			Row(LOCTEXT("PauseKey", "Esc"), LOCTEXT("PauseHelp", "暂停或返回"));
+			Heading(LOCTEXT("ControlTitle", "怎么玩"));
+			Row(LOCTEXT("Movement", "WASD / 方向键"), LOCTEXT("GridMovement", "走一步；踩到冰面会继续滑"));
+			Row(LOCTEXT("SwitchKey", "Tab"), LOCTEXT("SwitchPlayer", "切换 A 和 B"));
+			Row(LOCTEXT("PreviewKey", "H"), LOCTEXT("PreviewHelp", "看看下一步能去哪儿"));
+			Row(LOCTEXT("InteractKey", "E"), LOCTEXT("InteractHelp", "操作脚下的机关，或确认预览"));
+			Row(LOCTEXT("UndoKey", "Z / Ctrl+Z"), LOCTEXT("UndoHelp", "退回上一次操作，可以连续撤销"));
+			Row(LOCTEXT("ResetKey", "R"), LOCTEXT("ResetHelp", "从这关的起点重来"));
+			Row(LOCTEXT("MusicKey", "M"), LOCTEXT("MusicHelp", "打开或关闭音乐"));
+			Row(LOCTEXT("PauseKey", "Esc"), LOCTEXT("PauseHelp", "暂停，或返回上一页"));
 			Body->AddSlot().AutoHeight().Padding(0,7,0,14)
 			[
 				SNew(SBox).WidthOverride(760)
 				[
 					SNew(STextBlock).Font(Font(18,false)).ColorAndOpacity(Muted).AutoWrapText(true)
-					.Text(LOCTEXT("Rule",
-						"站台供两人落脚。离开站台后，只能踩同伴留下的脚印；空格、自己的脚印和已坍塌格都不能进入。\n"
-						"踩上同伴的印会把它改成自己的颜色，这正是把下一步留给同伴的方式。\n"
-						"OUT · 发件印板：角色踩上 OUT 时会读取来源脚印的当前颜色，并把它寄给对应连线末端的 IN。\n"
-						"IN · 收件印板：保留寄出瞬间的颜色，角色必须走到 IN 上才能借用；空 IN 不能进入。\n"
-						"WAIT · 正在送达：目标被占用或送印尚未到期时，印板会闪烁等待。\n"
-						"1 · 一次性印板：离开后立即坍塌，不能再回来。"))
+					.Text(LOCTEXT("Rule", "蓝色的 A 只能踩橙色脚印，橙色的 B 只能踩蓝色脚印。踩过以后，这格变成自己的颜色。\n起点和出口按各自的标记走。空的脚印格、自己的脚印、已经塌掉的石板都不能踩。\nOUT 会传出脚印，IN 是接收的位置。颜色还没送到，或接收处有人时，会显示 WAIT。\n标着 1 的石板，离开就会塌。"))
 				]
 			];
 			Action(LOCTEXT("Back", "返回"), &AGridManager::TogglePause, true);
 			break;
 		case EGridScreen::Paused:
-			Heading(LOCTEXT("Paused", "暂停"));
+			Heading(LOCTEXT("Paused", "歇一下"));
 			Action(LOCTEXT("Resume", "继续游戏"), &AGridManager::TogglePause, true);
 			if (Manager.HasUndoMove()) { Action(LOCTEXT("Undo", "撤销上一步"), &AGridManager::UndoMove); }
-			Action(LOCTEXT("Reset", "重置本关"), &AGridManager::ResetLevel);
-			Action(LOCTEXT("Controls", "操作说明"), &AGridManager::ShowControls);
-			Action(LOCTEXT("Select", "选择关卡"), &AGridManager::ShowSelection);
-			Action(LOCTEXT("MainMenu", "返回主菜单"), &AGridManager::ShowMenu);
+			Action(LOCTEXT("Reset", "重新开始"), &AGridManager::ResetLevel);
+			Action(LOCTEXT("Controls", "怎么玩"), &AGridManager::ShowControls);
+			Action(LOCTEXT("Select", "选关"), &AGridManager::ShowSelection);
+			Action(LOCTEXT("MainMenu", "返回菜单"), &AGridManager::ShowMenu);
 			break;
 		case EGridScreen::Complete:
-			Heading(LOCTEXT("Clear", "两人已抵达"));
+			Heading(LOCTEXT("Clear", "过关了"));
 			Body->AddSlot().AutoHeight().Padding(0,0,0,17)
 			[
-				Text(FText::Format(LOCTEXT("ClearDetails", "{0}   /   共 {1} 步"),
+				Text(FText::Format(LOCTEXT("ClearDetails", "{0}  ·  {1} 步"),
 					Manager.GetLevelTitle(), FText::AsNumber(Manager.GetMoveCount())), 18, Muted)
 			];
 			if (Manager.HasCurrentLevelEcho())
 			{
 				Body->AddSlot().AutoHeight().Padding(0,0,0,17)
 				[
-					Text(FText::Format(LOCTEXT("EchoFound", "回响已留下 · {0}"),
+					Text(FText::Format(LOCTEXT("EchoFound", "找到回响：{0}"),
 						Manager.GetLevelEchoName(Manager.GetSourceLevelIndex())), 17, Orange)
 				];
 			}
 			if (Manager.IsFinalLevel())
 			{
-				Action(LOCTEXT("ViewEnding", "查看结局"), &AGridManager::Advance, true);
+				Action(LOCTEXT("ViewEnding", "继续"), &AGridManager::Advance, true);
 			}
 			else
 			{
@@ -398,16 +397,16 @@ TSharedRef<SWidget> MakeGridPuzzleScreen(AGridManager& Manager)
 			[
 				Card(SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-					[Text(LOCTEXT("EndingLine1", "你走过的路，成为了我的路。"), 30)]
+					[Text(LOCTEXT("EndingLine1", "到了。"), 30)]
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0,8,0,14)
-					[Text(LOCTEXT("EndingLine2", "而我们，终于走到了这里。"), 20, Muted)]
+					[Text(LOCTEXT("EndingLine2", "下次也一起走吧。"), 20, Muted)]
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
 					[
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot().AutoWidth().Padding(0,0,8,0)
-						[Button(LOCTEXT("SelectChallenges", "挑战关卡"), &Manager, &AGridManager::ShowSelection, true)]
+						[Button(LOCTEXT("SelectChallenges", "再选一关"), &Manager, &AGridManager::ShowSelection, true)]
 						+ SHorizontalBox::Slot().AutoWidth()
-						[Button(LOCTEXT("MainMenu", "返回主菜单"), &Manager, &AGridManager::ShowMenu)]
+						[Button(LOCTEXT("MainMenu", "返回菜单"), &Manager, &AGridManager::ShowMenu)]
 					])
 			];
 		}
