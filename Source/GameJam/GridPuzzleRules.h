@@ -43,6 +43,10 @@ struct FTileData
 	UPROPERTY(BlueprintReadOnly) bool bPrintTrigger = false;
 	UPROPERTY(BlueprintReadOnly) bool bPrintReceiver = false;
 	UPROPERTY(BlueprintReadOnly) bool bPrintPending = false;
+	UPROPERTY(BlueprintReadOnly) bool bStoredPrintSource = false;
+	UPROPERTY(BlueprintReadOnly) int32 PrintDelayMoves = 0;
+	UPROPERTY(BlueprintReadOnly) int32 PendingPrintSteps = 0;
+	UPROPERTY(BlueprintReadOnly) EFootprintOwner PendingPrintOwner = EFootprintOwner::None;
 	// 标记这枚脚印是否由本次游玩的角色写出，寄送与转桥会携带这个标记。
 	UPROPERTY(BlueprintReadOnly) bool bFreshPrint = false;
 	// 转桥在两个朝向各保留一组网格槽位，当前朝向之外的槽位视为虚空。
@@ -237,6 +241,10 @@ public:
 	int32 GetMoveCount() const { return MoveCount; }
 	int32 GetRhythmPeriod() const { return RhythmPeriod; }
 	const TArray<FGridPrintEffect>& GetPrintEffects() const { return PrintEffects; }
+	bool IsPrintEffectUsed(int32 Index) const { return UsedPrintEffects.Contains(Index); }
+	bool IsPrintEffectPending(int32 Index) const;
+	// 只编码会影响后续合法行动的状态，供提示搜索与路线缓存使用。
+	FString GetHintStateKey() const;
 
 	static int32 RoleIndex(EPlayerRole Role) { return Role == EPlayerRole::PlayerA ? 0 : 1; }
 

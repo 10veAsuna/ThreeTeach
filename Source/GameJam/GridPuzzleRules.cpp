@@ -143,6 +143,7 @@ bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 			return false;
 		}
 		Trigger->bPrintTrigger = true;
+		Trigger->PrintDelayMoves = FMath::Max(Trigger->PrintDelayMoves, Effect.DelayMoves);
 		TSet<FIntPoint> Sources;
 		TSet<FIntPoint> Targets;
 		for (const FGridPrintLink& Link : Effect.Links)
@@ -157,6 +158,7 @@ bool FGridPuzzleRules::Initialize(const UGridLevelDataAsset& Level)
 				return false;
 			}
 			Sources.Add(Link.Source);
+			Source->bStoredPrintSource |= Link.Source != Effect.Trigger;
 			Targets.Add(Link.Target);
 			Target->bPrintReceiver = true;
 		}
@@ -711,13 +713,26 @@ void FGridPuzzleRules::UpdatePrintEffects(FGridMove& Move, EFootprintOwner Owner
 	{
 		FTileData& Tile = Pair.Value;
 		if (!Tile.bPrintReceiver) { continue; }
-		const bool bPending = PendingPrints.ContainsByPredicate([&Pair](const FPendingPrint& Pending)
+		bool bPending = false;
+		int32 Steps = 0;
+		EFootprintOwner PendingOwner = EFootprintOwner::None;
+		for (const FPendingPrint& Pending : PendingPrints)
 		{
-			return Pending.Writes.ContainsByPredicate([&Pair](const FPrintWrite& Write) { return Write.Target == Pair.Key; });
-		});
-		if (bPending != Tile.bPrintPending)
+			for (const FPrintWrite& Write : Pending.Writes)
+			{
+				if (Write.Target == Pair.Key && (!bPending || Pending.Steps < Steps))
+				{
+					bPending = true;
+					Steps = Pending.Steps;
+					PendingOwner = Write.Owner;
+				}
+			}
+		}
+		if (bPending != Tile.bPrintPending || Steps != Tile.PendingPrintSteps || PendingOwner != Tile.PendingPrintOwner)
 		{
 			Tile.bPrintPending = bPending;
+			Tile.PendingPrintSteps = Steps;
+			Tile.PendingPrintOwner = PendingOwner;
 			Move.ChangedTiles.AddUnique(Pair.Key);
 		}
 	}

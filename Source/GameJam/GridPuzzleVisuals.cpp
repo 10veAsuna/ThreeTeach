@@ -137,7 +137,7 @@ void AGridTile::Setup(const FTileData& Data, UMaterialInterface* Material)
 			FVector(.68f,.68f,.013f), Edge);
 		Ripple->SetVisibility(false);
 		MakeFootprints(Material);
-		if (bImprint || Data.bPrintTrigger || Data.bPrintReceiver || bSingleUse || !Data.InteractionLabel.IsEmpty())
+		if (bImprint || Data.bPrintTrigger || Data.bPrintReceiver || Data.bStoredPrintSource || bSingleUse || !Data.InteractionLabel.IsEmpty())
 		{
 			MarkerText = GridLabel(*this, RootComponent, Data.Marker, FVector(27,0,22), 20.f);
 		}
@@ -198,6 +198,7 @@ void AGridTile::FaceMarker(const FRotator& Rotation)
 	if (MarkerText) { MarkerText->SetWorldRotation(Rotation); }
 	if (BridgeReadout) { BridgeReadout->SetWorldRotation(Rotation); }
 	if (ActionMarker) { ActionMarker->SetWorldRotation(Rotation); }
+	if (LinkBadge) { LinkBadge->SetWorldRotation(Rotation); }
 	if (FusionLabel) { FusionLabel->SetWorldRotation(Rotation); }
 }
 
@@ -241,18 +242,78 @@ void AGridTile::AddBridgeLink(const FVector& SourceOffset, UMaterialInterface* M
 }
 
 // 寄印发送端与接收端之间的连线，方向和长度由管理器提供的相对坐标决定。
-void AGridTile::AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Material)
+TArray<UStaticMeshComponent*> AGridTile::AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Material, bool bSourceGuide, int32 Lane)
 {
-	GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
-		TargetOffset * .5f + FVector(0,0,-12), FVector(TargetOffset.Size() / 100.f,.017f,.018f),
-		FLinearColor(.14f,.41f,.51f), .42f, TargetOffset.Rotation());
+	TArray<UStaticMeshComponent*> Meshes;
+	const float Height = 28.f + (Lane % 3) * 5.f;
+	const float SideGap = 72.f + (Lane % 3) * 24.f;
+	if (bSourceGuide)
+	{
+		// 虚线只说明机关从哪一格取色，不表示向该格送印。
+		const FVector Start = TargetOffset.GetSafeNormal() * 26.f + FVector(0,0,Height);
+		const FVector End = TargetOffset - TargetOffset.GetSafeNormal() * 26.f + FVector(0,0,Height);
+		const int32 Count = FMath::Max(1, FMath::CeilToInt((End - Start).Size() / 22.f));
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const FVector A = FMath::Lerp(Start, End, float(Index) / Count);
+			const FVector B = FMath::Lerp(Start, End, (Index + .55f) / Count);
+			Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube, (A + B) * .5f,
+				FVector((B - A).Size() / 100.f,.022f,.018f), FLinearColor(.62f,.69f,.70f), .55f, (B - A).Rotation()));
+		}
+		return Meshes;
+	}
+	const bool bShortLink = TargetOffset.Size() <= 180.f;
+	const bool bAlongGrid = FMath::IsNearlyZero(TargetOffset.X) || FMath::IsNearlyZero(TargetOffset.Y);
+	if (bShortLink || bAlongGrid)
+	{
+		// 邻格及沿整排石板的连线容易被遮住，改走侧边并抬高。
+		const FVector Direction = TargetOffset.GetSafeNormal();
+		const FVector Side = FVector::CrossProduct(Direction, FVector::UpVector);
+		TArray<FVector> Points;
+		Points.Add(Direction * 34.f + FVector(0,0,Height));
+		if (bShortLink) { Points.Add(TargetOffset * .5f + Side * SideGap + FVector(0,0,Height)); }
+		else
+		{
+			Points.Add(Points[0] + Side * SideGap);
+			Points.Add(TargetOffset - Direction * 34.f + Side * SideGap + FVector(0,0,Height));
+		}
+		Points.Add(TargetOffset - Direction * 34.f + FVector(0,0,Height));
+		for (int32 Index = 0; Index < Points.Num() - 1; ++Index)
+		{
+			const FVector Delta = Points[Index + 1] - Points[Index];
+			Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
+				(Points[Index + 1] + Points[Index]) * .5f, FVector(Delta.Size() / 100.f,.025f,.020f),
+				FLinearColor(.26f,.64f,.73f), .75f, Delta.Rotation()));
+		}
+		Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
+			FMath::Lerp(Points.Last(1), Points.Last(), .75f), FVector(.10f,.10f,.22f),
+			FLinearColor(.50f,.88f,.92f), 1.f, FRotationMatrix::MakeFromZ(Points.Last() - Points.Last(1)).Rotator()));
+		return Meshes;
+	}
+	Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
+		TargetOffset * .5f + FVector(0,0,-12 + (Lane % 3) * 4.f), FVector(TargetOffset.Size() / 100.f,.017f,.018f),
+		FLinearColor(.14f,.41f,.51f), .42f, TargetOffset.Rotation()));
 	// 沿寄送方向放置箭头，长距离连线和双向回信也可分辨去向。
-	GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
-		TargetOffset * .76f + FVector(0, 0, -10), FVector(.10f, .10f, .22f),
-		FLinearColor(.38f, .76f, .83f), .8f, FRotationMatrix::MakeFromZ(TargetOffset).Rotator());
+	Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
+		TargetOffset * .76f + FVector(0, 0, -10 + (Lane % 3) * 4.f), FVector(.10f, .10f, .22f),
+		FLinearColor(.38f, .76f, .83f), .8f, FRotationMatrix::MakeFromZ(TargetOffset).Rotator()));
+	return Meshes;
 }
 
 // 更新条件读数与连线高亮，显示桥当前还缺哪些角色或印记。
+void AGridTile::ShowLinkBadge(const FString& Label, FColor Color)
+{
+	if (!LinkBadge && !Label.IsEmpty())
+	{
+		LinkBadge = GridLabel(*this, RootComponent, Label, FVector(-24,-27,24), 13.f);
+		LinkBadge->SetWorldRotation(MarkerRotation);
+	}
+	if (!LinkBadge) { return; }
+	LinkBadge->SetText(FText::FromString(Label));
+	LinkBadge->SetTextRenderColor(Color);
+	LinkBadge->SetVisibility(!Label.IsEmpty() && !TileData.bFoldedAway);
+}
+
 void AGridTile::UpdateBridgeStatus(const TArray<FString>& Labels, const TArray<bool>& Matches)
 {
 	if (!BridgeReadout) { return; }
@@ -370,6 +431,7 @@ void AGridTile::Update(const FTileData& Data, bool bPulse)
 		Pieces->SetRelativeLocation(FVector::ZeroVector);
 	}
 	Pieces->SetHiddenInGame(Data.bFoldedAway, true);
+	if (LinkBadge && Data.bFoldedAway) { LinkBadge->SetVisibility(false); }
 	if (MarkerText) { MarkerText->SetVisibility(!Data.bFoldedAway); }
 	if (bRestored)
 	{
@@ -408,12 +470,16 @@ void AGridTile::Update(const FTileData& Data, bool bPulse)
 			FLinearColor(.38f,.59f,.66f), bHasOwner ? .65f : .16f);
 		if (MarkerText)
 		{
-			const TCHAR* Label = Data.bPrintPending ? TEXT("WAIT") : !Data.InteractionLabel.IsEmpty() ? *Data.InteractionLabel :
-				Data.bPrintTrigger ? TEXT("OUT") :
+			const FString Label = Data.bPrintPending ? (Data.PendingPrintSteps > 0 ?
+				FString::Printf(TEXT("WAIT %d"), Data.PendingPrintSteps) : FString(TEXT("WAIT"))) :
+				!Data.InteractionLabel.IsEmpty() ? Data.InteractionLabel :
+				Data.bStoredPrintSource ? FString(TEXT("SAVE")) :
+				Data.bPrintTrigger ? (Data.PrintDelayMoves > 0 ? FString::Printf(TEXT("OUT %d"), Data.PrintDelayMoves) : FString(TEXT("OUT"))) :
 				Data.bPrintReceiver ? TEXT("IN") :
 				Data.TileType == ETileType::SingleUse ? TEXT("1") : *Data.Marker;
 			MarkerText->SetText(FText::FromString(Label));
-			MarkerText->SetTextRenderColor(Data.bPrintPending ? FColor(255,217,142) : FColor(219,245,245));
+			MarkerText->SetTextRenderColor(Data.bPrintPending ?
+				(Data.PendingPrintOwner == EFootprintOwner::PlayerA ? FColor(130,215,255) : FColor(255,201,128)) : FColor(219,245,245));
 		}
 		for (UStaticMeshComponent* Print : BluePrints) { Print->SetVisibility(bBlue); }
 		for (UStaticMeshComponent* Print : OrangePrints) { Print->SetVisibility(bOrange); }

@@ -10,6 +10,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Components/StaticMeshComponent.h"
 #include "GridPuzzleAudioWave.h"
 #include "Sound/SoundGenerator.h"
 
@@ -797,6 +798,7 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 		FString(Routes[Index]).ParseIntoArrayWS(Inputs);
 		int32 TurnCount = 0;
 		bool bWaitedForReturnPrint = false;
+		bool bQueuedFinalExit = false, bDeliveredFinalExit = false;
 		for (const FString& Input : Inputs)
 		{
 			const EPlayerRole Role = Input[0] == 'A' ? Blue : Orange;
@@ -815,7 +817,29 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 			else
 			{
 				const FIntPoint Dir = Input[1] == 'R' ? Right : Input[1] == 'L' ? Left : Input[1] == 'U' ? Up : Down;
-				if (!TestTrue(Board->Title.ToString() + TEXT(" ") + Input, Rules.TryMove(Role, Dir).Result == EGridMoveResult::Moved)) { return false; }
+				const FGridMove Move = Rules.TryMove(Role, Dir);
+				if (!TestTrue(Board->Title.ToString() + TEXT(" ") + Input, Move.Result == EGridMoveResult::Moved)) { return false; }
+				if (Index == 4 && Role == Blue && Move.To == FIntPoint(8, 6))
+				{
+					bQueuedFinalExit = true;
+					const FTileData& Receiver = Rules.GetTiles().FindChecked({8, 7});
+					TestTrue(TEXT("The stored orange print is visibly identified"), Rules.GetTiles().FindChecked({9, 6}).bStoredPrintSource);
+					TestEqual(TEXT("The send tile displays its one-step delay"), Rules.GetTiles().FindChecked({8, 6}).PrintDelayMoves, 1);
+					TestTrue(TEXT("A's move queues the final print"), Receiver.bPrintPending);
+					TestEqual(TEXT("WAIT shows exactly one remaining move"), Receiver.PendingPrintSteps, 1);
+					TestTrue(TEXT("WAIT identifies the queued color as orange"), Receiver.PendingPrintOwner == EFootprintOwner::PlayerB);
+				}
+				if (Index == 4 && Role == Orange && Move.To == FIntPoint(7, 2))
+				{
+					bDeliveredFinalExit = true;
+					const FTileData& Receiver = Rules.GetTiles().FindChecked({8, 7});
+					TestFalse(TEXT("B's next move clears the pending marker"), Receiver.bPrintPending);
+					TestEqual(TEXT("The delivered receiver clears its countdown"), Receiver.PendingPrintSteps, 0);
+					TestTrue(TEXT("B advances A's earlier orange dispatch"), Move.PrintArrivals.ContainsByPredicate([](const FGridPrintTransfer& Arrival)
+					{
+						return Arrival.From == FIntPoint(8, 6) && Arrival.To == FIntPoint(8, 7) && Arrival.Owner == EFootprintOwner::PlayerB;
+					}));
+				}
 				if (Index == 2 && Rules.GetPosition(Blue) == FIntPoint(8, 1) &&
 					Rules.GetPosition(Orange) != FIntPoint(8, 7))
 				{
@@ -826,6 +850,10 @@ bool FGridFusionTest::RunTest(const FString& Parameters)
 			}
 		}
 		TestTrue(TEXT("Both players finish on their original board"), Rules.IsComplete());
+		if (Index == 4)
+		{
+			TestTrue(TEXT("The final route exercises both dispatch and delivery"), bQueuedFinalExit && bDeliveredFinalExit);
+		}
 		if (Index == 2)
 		{
 			TestTrue(TEXT("The first visit cannot replace the later return"), bWaitedForReturnPrint);
@@ -893,7 +921,11 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Campaign map has one board"), Manager->GetSectionCount(), 1);
 	const FText BeforeUnlockHint = Manager->GetLevelHint();
 	const FString BeforePreview = FGridTestSearch::StateKey(Manager->Rules);
+	Manager->RequestNextStep();
+	TestTrue(TEXT("F1 immediately offers a verified opening action"), Manager->StepHint.IsSet());
+	TestEqual(TEXT("Requesting a hint preserves the live board"), FGridTestSearch::StateKey(Manager->Rules), BeforePreview);
 	Manager->ToggleMovePreview();
+	TestFalse(TEXT("Movement preview replaces the old next-step hint"), Manager->StepHint.IsSet());
 	TestTrue(TEXT("Movement preview marks the current board"), !Manager->MovePreviewMarkers.IsEmpty());
 	TestEqual(TEXT("Movement preview preserves every rule state"),
 		FGridTestSearch::StateKey(Manager->Rules), BeforePreview);
@@ -917,6 +949,28 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	Manager->ResetLevel();
 	TestEqual(TEXT("Reset restarts whole chapter"), Manager->GetMoveCount(), 0);
 	TestFalse(TEXT("Reset clears undo history"), Manager->HasUndoMove());
+	Manager->RequestNextStep();
+	Manager->UnlockInputAt = 0.f;
+	Manager->Move(Right);
+	TestFalse(TEXT("A successful move clears a stale hint"), Manager->StepHint.IsSet() || Manager->HintSearch.IsValid());
+	Manager->LoadLevel(4);
+	Manager->SetScreen(EGridScreen::Playing);
+	TestTrue(TEXT("Final chapter exposes its relay groups"), !Manager->PrintConnections.IsEmpty());
+	Manager->TogglePrintLinks();
+	TestTrue(TEXT("All mode reveals a relay line"), Manager->PrintConnections[0].Pieces[0]->IsVisible());
+	Manager->TogglePrintLinks();
+	TestFalse(TEXT("Hidden mode hides relay lines"), Manager->PrintConnections[0].Pieces[0]->IsVisible());
+	Manager->TogglePrintLinks();
+	for (int32 Step = 0; Step < 2; ++Step) { Manager->UnlockInputAt = 0.f; Manager->Move(Right); }
+	int32 VisibleGroups = 0;
+	for (const auto& Connection : Manager->PrintConnections)
+	{
+		VisibleGroups += Connection.Pieces.ContainsByPredicate([](const TWeakObjectPtr<UStaticMeshComponent>& Piece)
+		{
+			return Piece.IsValid() && Piece->IsVisible();
+		}) ? 1 : 0;
+	}
+	TestEqual(TEXT("Related mode shows a single nearby relay group"), VisibleGroups, 1);
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);
 	return true;
@@ -960,6 +1014,60 @@ bool FGridAudioPlaybackTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Muted background music retains its playback position"),
 		Bed->VirtualizationMode == EVirtualizationMode::PlayWhenSilent);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGridHintPlannerTest, "OneStep.Rules.NextStepHints",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FGridHintPlannerTest::RunTest(const FString& Parameters)
+{
+	const auto Campaign = AGridManager::CreateCampaignLevels();
+	TArray<UGridLevelDataAsset*> Boards = Campaign;
+	Boards.Append(AGridManager::CreatePrototypeLevels());
+	for (int32 Index = 0; Index < Boards.Num(); ++Index)
+	{
+		FGridPuzzleRules Live;
+		if (!TestTrue(TEXT("Hint board initializes"), Live.Initialize(*Boards[Index]))) { return false; }
+		const auto Guide = FGridHintGuide::Build(Live, Index);
+		for (int32 Step = 0; Step < 150 && !Live.IsComplete(); ++Step)
+		{
+			const FString Before = Live.GetHintStateKey();
+			FGridHintSearch Search(Live, Guide);
+			while (Search.GetStatus() == FGridHintSearch::EStatus::Searching) { Search.Advance(.01); }
+			if (!TestTrue(Boards[Index]->Title.ToString() + TEXT(" has a winning next action"),
+				Search.GetStatus() == FGridHintSearch::EStatus::Found)) { return false; }
+			TestEqual(TEXT("Looking for a hint does not mutate the live board"), Live.GetHintStateKey(), Before);
+			FGridHintAction Action = Search.GetAction();
+			if (!TestTrue(TEXT("The proposed move or mechanism is legal"), FGridHintSearch::Apply(Live, Action))) { return false; }
+		}
+		TestTrue(TEXT("Following the hints finishes both roles"), Live.IsComplete());
+	}
+	FGridPuzzleRules Detour;
+	Detour.Initialize(*Campaign[0]);
+	const auto Guide = FGridHintGuide::Build(Detour, 0);
+	Detour.TryMove(Blue, Right);
+	Detour.TryMove(Orange, Left);
+	Detour.TryMove(Orange, Right);
+	TestTrue(TEXT("The reordered detour is outside the reference guide"), Guide->Find(Detour) == nullptr);
+	FGridHintSearch Recovery(Detour, Guide);
+	while (Recovery.GetStatus() == FGridHintSearch::EStatus::Searching) { Recovery.Advance(.01); }
+	TestTrue(TEXT("An off-guide live state gets a searched continuation"), Recovery.GetStatus() == FGridHintSearch::EStatus::Found);
+	if (Recovery.GetStatus() == FGridHintSearch::EStatus::Found)
+	{
+		FGridHintAction Next = Recovery.GetAction();
+		TestTrue(TEXT("The recovered action is legal in the detour state"), FGridHintSearch::Apply(Detour, Next));
+	}
+	UGridLevelDataAsset* Split = NewObject<UGridLevelDataAsset>();
+	Split->Rows = {TEXT("bAo#uBa")};
+	FGridPuzzleRules DeadEnd;
+	TestTrue(TEXT("Separated exit test board initializes"), DeadEnd.Initialize(*Split));
+	FGridHintSearch Impossible(DeadEnd, MakeShared<FGridHintGuide>());
+	while (Impossible.GetStatus() == FGridHintSearch::EStatus::Searching) { Impossible.Advance(.01); }
+	TestTrue(TEXT("An exhausted search reports a proven dead end"), Impossible.GetStatus() == FGridHintSearch::EStatus::NoSolution);
+	FGridHintSearch Limited(DeadEnd, MakeShared<FGridHintGuide>(), 1);
+	Limited.Advance(.01);
+	TestTrue(TEXT("A resource limit is not reported as an impossible puzzle"), Limited.GetStatus() == FGridHintSearch::EStatus::LimitReached);
 	return true;
 }
 

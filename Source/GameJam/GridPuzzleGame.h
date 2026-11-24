@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SaveGame.h"
 #include "GridPuzzleRules.h"
+#include "GridPuzzleHints.h"
 #include "GridPuzzleGame.generated.h"
 
 class ACameraActor;
@@ -14,6 +15,8 @@ class AGridPuzzleCharacter;
 class UMaterialInterface;
 class SWidget;
 class UGridMusicComponent;
+class UAudioComponent;
+class UStaticMeshComponent;
 
 // 菜单、引导、游玩、暂停、结算与结局共用一个界面状态，由 SetScreen 统一切换。
 enum class EGridScreen : uint8 { Menu, Selection, Achievements, Controls, MechanicIntro, Playing, Paused, Transition, Complete, Ending };
@@ -58,6 +61,9 @@ public:
 	void TogglePause();
 	void ToggleMovePreview();
 	void ToggleMusic();
+	void RequestNextStep();
+	void TogglePrintLinks();
+	FText GetLinkHelp() const;
 	void Exit();
 
 	// 默认关卡定义在 GridPuzzleChapters.cpp 中，Python 可据此生成可编辑的 Data Asset。
@@ -148,6 +154,10 @@ private:
 	};
 
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	bool AdvanceStepHint();
+	void ClearStepHint();
+	FText FormatStepHint() const;
+	void UpdatePrintConnections();
 	// 切关时重建地块和人物，编辑器静态地图只承担启动场景的作用。
 	bool LoadLevel(int32 Index, int32 Section = 0, bool bContinueChapter = false);
 	const UGridLevelDataAsset* CurrentSection() const;
@@ -157,6 +167,7 @@ private:
 	void UpdateBridgeDisplays();
 	void PresentMove(EPlayerRole Mover, const FGridMove& MoveResult);
 	UPROPERTY() TObjectPtr<UGridMusicComponent> Music;
+	UPROPERTY() TObjectPtr<UAudioComponent> CompletionAudio;
 	bool bMusicMuted = false;
 	void ApplyTileUpdates(const TArray<FIntPoint>& Positions, bool bPulse, bool& bCollapsed, bool& bBridgeChanged);
 	void CheckCompletion();
@@ -193,6 +204,18 @@ private:
 	TArray<FUndoStep> UndoHistory;
 	TArray<FIntPoint> PreviewMarkers;
 	TArray<FIntPoint> MovePreviewMarkers;
+	TArray<FIntPoint> HintMarkers;
+	TSharedPtr<FGridHintGuide> HintGuide;
+	TSharedPtr<FGridHintSearch> HintSearch;
+	TOptional<FGridHintAction> StepHint;
+	FText StepHintStatus;
+	struct FPrintConnection
+	{
+		int32 EffectIndex;
+		TArray<TWeakObjectPtr<UStaticMeshComponent>> Pieces;
+	};
+	TArray<FPrintConnection> PrintConnections;
+	int32 PrintLinkMode = 0; // 相关、全部、隐藏
 	TArray<FGridMove> ReplaySteps;
 	TArray<FGridPuzzleRules> ReplayStates;
 	FText Feedback;
@@ -245,6 +268,8 @@ private:
 	void Interact();
 	void PreviewMoves();
 	void MuteMusic();
+	void NextStep();
+	void PrintLinks();
 	void Undo();
 	void Reset();
 	void PauseOrBack();

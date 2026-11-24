@@ -1,10 +1,13 @@
 #include "GridPuzzleSound.h"
 
-#include "GridPuzzleAudioWave.h"
+#include "GridMusicScore.h"
+#include "Components/AudioComponent.h"
+#include "Containers/Ticker.h"
 #include "Kismet/GameplayStatics.h"
+#include "Sound/SoundWaveProcedural.h"
 
 // 根据事件生成单声道 PCM 数据，通过 USoundWaveProcedural 播放。
-void PlayGridSound(UObject* Context, EGridSound Sound, float Volume)
+UAudioComponent* PlayGridSound(UObject* Context, EGridSound Sound, float Volume)
 {
 	// 每行依次配置时长、主频、后续叠加频率和音量，顺序对应 EGridSound。
 	static constexpr struct
@@ -52,7 +55,37 @@ void PlayGridSound(UObject* Context, EGridSound Sound, float Volume)
 		}
 		Data[Index] = static_cast<int16>(Envelope * Signal * Cue.Level * 32767.f);
 	}
-	UGridPcmSoundWave* Wave = NewObject<UGridPcmSoundWave>();
-	Wave->SetPcm(MoveTemp(Data), 1, SampleRate, false);
-	UGameplayStatics::PlaySound2D(Context, Wave, FMath::Clamp(Volume, 0.f, 1.f));
+	int32 Channels = 1;
+	if (Sound == EGridSound::Complete)
+	{
+		// 两种音色依次响起后合成和弦，让通关提示与普通落脚声清楚区分。
+		auto Notes = GridMusic::Goal(true, true);
+		for (auto& Note : Notes) { Note.Start *= .48; Note.Duration *= .48; }
+		const auto Samples = GridMusic::Render(Notes, 2.5);
+		Data.Reset();
+		Data.Append(Samples.data(), int32(Samples.size()));
+		Channels = 2;
+	}
+	USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>(Context);
+	Wave->SetSampleRate(SampleRate);
+	Wave->NumChannels = Channels;
+	Wave->Duration = float(Data.Num()) / (SampleRate * Channels);
+	Wave->bLooping = false;
+	Wave->Priority = Sound == EGridSound::Complete ? 10.f : 1.f;
+	Wave->bBypassVolumeScaleForPriority = Sound == EGridSound::Complete;
+	Wave->QueueAudio(reinterpret_cast<const uint8*>(Data.GetData()), Data.Num() * sizeof(int16));
+	// 使用有生命周期的组件保留采样，结算页切换与游戏暂停均不会截断声音。
+	UAudioComponent* Audio = UGameplayStatics::CreateSound2D(Context, Wave, FMath::Clamp(Volume, 0.f, 1.f));
+	if (!Audio) { return nullptr; }
+	Audio->SetUISound(true);
+	Audio->bStopWhenOwnerDestroyed = true;
+	Audio->Play();
+	// 基础 procedural wave 耗尽后只输出静音，必须显式停止。CoreTicker 不受关卡暂停影响。
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+		[WeakAudio = TWeakObjectPtr<UAudioComponent>(Audio)](float)
+		{
+			if (WeakAudio.IsValid()) { WeakAudio->Stop(); }
+			return false;
+		}), Wave->Duration + .15f);
+	return Audio;
 }

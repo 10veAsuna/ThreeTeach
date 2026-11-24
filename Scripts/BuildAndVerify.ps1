@@ -35,14 +35,14 @@ if (-not (Test-Path -LiteralPath $testLog)) { throw 'Automation log was not crea
 
 $successes = @(Select-String -LiteralPath $testLog -Pattern 'Test Completed\. Result=\{Success\}.*OneStep\.')
 $failures = @(Select-String -LiteralPath $testLog -Pattern 'Test Completed\. Result=\{Fail|Fatal error:|Assertion failed:')
-$requiredTests = @('OneStep.Rules.Fusion', 'OneStep.Runtime.ContinuousBoard', 'OneStep.Audio.PcmPlayback')
+$requiredTests = @('OneStep.Rules.Fusion', 'OneStep.Runtime.ContinuousBoard', 'OneStep.Audio.PcmPlayback', 'OneStep.Rules.NextStepHints')
 foreach ($test in $requiredTests) {
     if (-not ($successes | Where-Object { $_.Line.Contains($test) })) {
         throw "Required test did not succeed: $test. See $testLog"
     }
 }
-if ($failures.Count -gt 0 -or $successes.Count -lt 10) {
-    throw "Expected at least ten successful tests. See $testLog"
+if ($failures.Count -gt 0 -or $successes.Count -lt 11) {
+    throw "Expected at least eleven successful tests. See $testLog"
 }
 
 [pscustomobject]@{

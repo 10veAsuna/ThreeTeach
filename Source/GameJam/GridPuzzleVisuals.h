@@ -39,7 +39,8 @@ public:
 	void ShowActionMarker(const FText& Label, FColor Color);
 	void AnimateDeckFrom(FVector Center, FVector Start, float Duration);
 	void AddBridgeLink(const FVector& SourceOffset, UMaterialInterface* Material);
-	void AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Material);
+	TArray<UStaticMeshComponent*> AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Material, bool bSourceGuide = false, int32 Lane = 0);
+	void ShowLinkBadge(const FString& Label, FColor Color);
 	void UpdateBridgeStatus(const TArray<FString>& Labels, const TArray<bool>& Matches);
 	void AnimateOutro(float Strength);
 	void SetEchoAvailable(bool bAvailable, UMaterialInterface* Material);
@@ -70,6 +71,7 @@ private:
 	UPROPERTY() TObjectPtr<UTextRenderComponent> MarkerText;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> BridgeReadout;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> ActionMarker;
+	UPROPERTY() TObjectPtr<UTextRenderComponent> LinkBadge;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoMarker;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoHalo;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoBeam;

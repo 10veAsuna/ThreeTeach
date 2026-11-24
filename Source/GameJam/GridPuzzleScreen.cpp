@@ -309,6 +309,9 @@ namespace
 				.WrapTextAt(1050.f)
 				.Text_Lambda([Weak]() { return Weak.IsValid() ? Weak->GetLevelHint() : FText::GetEmpty(); }),
 				Panel, FMargin(17,8))]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0,4,0,0)
+			[SNew(STextBlock).Font(Font(14,false)).ColorAndOpacity(Muted)
+				.Text_Lambda([Weak]() { return Weak.IsValid() ? Weak->GetLinkHelp() : FText::GetEmpty(); })]
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0,5,0,0)
 			[Text(Manager.HasLevelAction() ? LOCTEXT("PrototypeKeyBar", "WASD 移动    Tab 换人    H 预览    E 机关    Z 撤销    R 重来    M 音乐    Esc 暂停") :
 				LOCTEXT("KeyBar", "WASD 移动    Tab 换人    H 预览    Z 撤销    R 重来    M 音乐    Esc 暂停"), 15, Muted)]
@@ -381,6 +384,8 @@ namespace
 			Row(LOCTEXT("Movement", "WASD / 方向键"), LOCTEXT("GridMovement", "走一步；踩到冰面会继续滑"));
 			Row(LOCTEXT("SwitchKey", "Tab"), LOCTEXT("SwitchPlayer", "切换 A 和 B"));
 			Row(LOCTEXT("PreviewKey", "H"), LOCTEXT("PreviewHelp", "查看可移动的位置"));
+			Row(LOCTEXT("HintKey", "F1"), LOCTEXT("HintHelp", "提示下一步，标出角色和目标格"));
+			Row(LOCTEXT("LinksKey", "L"), LOCTEXT("LinksHelp", "切换相关连线、全部连线或隐藏连线"));
 			Row(LOCTEXT("InteractKey", "E"), LOCTEXT("InteractHelp", "操作脚下的机关，或确认预览"));
 			Row(LOCTEXT("UndoKey", "Z / Ctrl+Z"), LOCTEXT("UndoHelp", "退回上一次操作，可以连续撤销"));
 			Row(LOCTEXT("ResetKey", "R"), LOCTEXT("ResetHelp", "从这关的起点重来"));
@@ -391,7 +396,7 @@ namespace
 				SNew(SBox).WidthOverride(760)
 				[
 					SNew(STextBlock).Font(Font(18,false)).ColorAndOpacity(Muted).AutoWrapText(true)
-					.Text(LOCTEXT("Rule", "蓝色的 A 只能踩橙色脚印，橙色的 B 只能踩蓝色脚印。踩过以后，这格变成自己的颜色。\n起点和出口按各自的标记走。空的脚印格、自己的脚印、已经塌掉的石板都不能踩。\nOUT 会传出脚印，IN 是接收的位置。颜色还没送到，或接收处有人时，会显示 WAIT。\n标着 1 的石板，离开就会塌。"))
+					.Text(LOCTEXT("Rule", "蓝色的 A 只能踩橙色脚印，橙色的 B 只能踩蓝色脚印。踩过以后，这格变成自己的颜色。\n起点和出口按各自的标记走。空的脚印格、自己的脚印、已经塌掉的石板都不能踩。\nOUT 发送脚印，SAVE 标出取色的位置，箭头指向接收格。WAIT 后的数字是还需移动的步数，任意角色移动都计步；换人不计步。\n标着 1 的石板，离开就会塌。"))
 				]
 			];
 			Action(LOCTEXT("Back", "返回"), &AGridManager::TogglePause, true);
@@ -399,6 +404,7 @@ namespace
 		case EGridScreen::Paused:
 			Heading(LOCTEXT("Paused", "暂停游戏"));
 			Action(LOCTEXT("Resume", "继续游戏"), &AGridManager::TogglePause, true);
+			Action(LOCTEXT("NextStep", "下一步提示"), &AGridManager::RequestNextStep);
 			if (Manager.HasUndoMove()) { Action(LOCTEXT("Undo", "撤销上一步"), &AGridManager::UndoMove); }
 			Action(LOCTEXT("Reset", "重新开始"), &AGridManager::ResetLevel);
 			Action(LOCTEXT("Controls", "玩法说明"), &AGridManager::ShowControls);
