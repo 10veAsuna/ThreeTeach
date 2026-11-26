@@ -17,9 +17,10 @@ class SWidget;
 class UGridMusicComponent;
 class UAudioComponent;
 class UStaticMeshComponent;
+enum class EGridSound;
 
 // 菜单、引导、游玩、暂停、结算与结局共用一个界面状态，由 SetScreen 统一切换。
-enum class EGridScreen : uint8 { Menu, Selection, Achievements, Controls, MechanicIntro, Playing, Paused, Transition, Complete, Ending };
+enum class EGridScreen : uint8 { Menu, Selection, Practice, Achievements, Controls, MechanicIntro, Playing, Paused, Confirm, Transition, Complete, Ending };
 
 // 蓝图可绑定这些事件，在 C++ 完成规则结算后追加音效、特效或其他表现。
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FGridTileEvent, FTileData, Tile);
@@ -37,6 +38,8 @@ public:
 	UPROPERTY() TArray<int32> CompletedLevels;
 	UPROPERTY() TArray<int32> EarnedEchoes;
 	UPROPERTY() TArray<int32> SeenMechanicIntros;
+	UPROPERTY() bool bMusicMuted = false;
+	UPROPERTY() bool bEffectsMuted = false;
 };
 
 // 场景与规则的协调者。创建地块和角色，接收输入，驱动界面与动画。
@@ -54,6 +57,13 @@ public:
 	void ShowControls();
 	void ShowMenu();
 	void ShowSelection();
+	void ShowPractice();
+	void RequestMenu();
+	void RequestSelection();
+	void RequestReset();
+	void ConfirmBoardChange();
+	void CancelBoardChange();
+	FText GetBoardChangePrompt() const;
 	void ShowAchievements();
 	void DismissMechanicIntro();
 	void SelectLevel(int32 Index);
@@ -61,6 +71,7 @@ public:
 	void TogglePause();
 	void ToggleMovePreview();
 	void ToggleMusic();
+	void ToggleEffects();
 	void RequestNextStep();
 	void TogglePrintLinks();
 	FText GetLinkHelp() const;
@@ -94,6 +105,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category="Sound") bool bPlayMusic = true;
 	UPROPERTY(EditDefaultsOnly, Category="Sound", meta=(ClampMin="0", ClampMax="1")) float MusicVolume = .65f;
 	bool IsMusicEnabled() const { return bPlayMusic && !bMusicMuted && MusicVolume > 0.f; }
+	bool IsSoundEnabled() const { return bPlaySound && !bEffectsMuted; }
 
 	EGridScreen GetScreen() const { return Screen; }
 	int32 GetLevelNumber() const { return LevelIndex + 1; }
@@ -158,6 +170,17 @@ private:
 	void ClearStepHint();
 	FText FormatStepHint() const;
 	void UpdatePrintConnections();
+	void UpdateOpeningGuide();
+	FText GetOpeningGuideText() const;
+	FText GetPrintConditionHint() const;
+	void PresentPrintTransfers(const FGridMove& MoveResult);
+	void ClearPrintTrails();
+	void AnimatePrintTrails();
+	void PlayEffect(EGridSound Sound);
+	void StopEffects();
+	void PlayCompletionCue(bool bEnding);
+	void StopCompletionCue();
+	void FinishCompletionCue();
 	// 切关时重建地块和人物，编辑器静态地图只承担启动场景的作用。
 	bool LoadLevel(int32 Index, int32 Section = 0, bool bContinueChapter = false);
 	const UGridLevelDataAsset* CurrentSection() const;
@@ -168,7 +191,11 @@ private:
 	void PresentMove(EPlayerRole Mover, const FGridMove& MoveResult);
 	UPROPERTY() TObjectPtr<UGridMusicComponent> Music;
 	UPROPERTY() TObjectPtr<UAudioComponent> CompletionAudio;
+	TArray<TWeakObjectPtr<UAudioComponent>> ActiveEffects;
+	FTimerHandle CompletionCueTimer;
+	bool bAdvanceAfterCue = false;
 	bool bMusicMuted = false;
+	bool bEffectsMuted = false;
 	void ApplyTileUpdates(const TArray<FIntPoint>& Positions, bool bPulse, bool& bCollapsed, bool& bBridgeChanged);
 	void CheckCompletion();
 	void ClearActionPreview();
@@ -215,11 +242,28 @@ private:
 		TArray<TWeakObjectPtr<UStaticMeshComponent>> Pieces;
 	};
 	TArray<FPrintConnection> PrintConnections;
+	struct FPrintTrail
+	{
+		TWeakObjectPtr<UStaticMeshComponent> Light;
+		TArray<FVector> Points;
+		FIntPoint To;
+		float StartedAt;
+		bool bArrived;
+	};
+	TArray<FPrintTrail> PrintTrails;
+	TOptional<FIntPoint> OpeningHighlight;
+	int32 RecentPrintEffect = INDEX_NONE;
+	int32 RelatedPrintEffect = INDEX_NONE;
+	FTimerHandle PrintTrailTimer;
 	int32 PrintLinkMode = 0; // 相关、全部、隐藏
 	TArray<FGridMove> ReplaySteps;
 	TArray<FGridPuzzleRules> ReplayStates;
 	FText Feedback;
 	EGridScreen Screen = EGridScreen::Menu;
+	enum class EBoardChange : uint8 { Reset, Selection, Menu };
+	void RequestBoardChange(EBoardChange Change);
+	EBoardChange PendingBoardChange = EBoardChange::Reset;
+	EGridScreen ScreenBeforeConfirm = EGridScreen::Playing;
 	EPlayerRole ActiveRole = EPlayerRole::PlayerA;
 	int32 LevelIndex = 0;
 	int32 SectionIndex = 0;

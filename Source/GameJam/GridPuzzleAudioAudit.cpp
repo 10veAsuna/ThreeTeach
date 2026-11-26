@@ -34,7 +34,7 @@ namespace
 				TEXT("bgm2"), TEXT("bgm3"), TEXT("bgm4"), TEXT("bgm5"), TEXT("paused_bgm"),
 				TEXT("complete_music_muted"), TEXT("rapid_footsteps"), TEXT("after_cleanup"), TEXT("complete_after_stress")};
 			Duration = Phase >= 11 && Phase <= 17 && Phase != 12 ? 4.f : 1.f;
-			if (Phase == 8 || Phase == 19 || Phase == 22) { Duration = 2.9f; }
+			if (Phase == 8 || Phase == 19 || Phase == 22) { Duration = 5.1f; }
 			if (Phase == 18) { Duration = 2.f; }
 			if (Phase == 20) { Duration = 6.3f; }
 			bool bComponentCreated = true;

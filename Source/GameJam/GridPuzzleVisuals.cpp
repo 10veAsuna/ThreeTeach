@@ -219,6 +219,29 @@ void AGridTile::ShowActionMarker(const FText& Label, FColor Color)
 	if (MarkerText) { MarkerText->SetVisibility(Label.IsEmpty() && !TileData.bFoldedAway); }
 }
 
+void AGridTile::SetOpeningHighlight(bool bVisible)
+{
+	if (bVisible && !OpeningHalo)
+	{
+		OpeningHalo = GridVisuals::Shape(*this, Pieces, VisualMaterial, EGridShape::Cylinder,
+			FVector(0,0,2.5f), FVector(.91f,.91f,.016f), FLinearColor(.86f,.68f,.25f), 1.35f);
+	}
+	if (OpeningHalo) { OpeningHalo->SetVisibility(bVisible); }
+}
+
+void AGridTile::PulseTile()
+{
+	if (TileData.bIsCollapsed || TileData.bFoldedAway) { return; }
+	if (!FeedbackPulse)
+	{
+		FeedbackPulse = GridVisuals::Shape(*this, Pieces, VisualMaterial, EGridShape::Cylinder,
+			FVector(0,0,5), FVector(.68f,.68f,.014f), FLinearColor(.49f,.85f,.88f), 1.6f);
+	}
+	FeedbackPulseStart = GetWorld()->GetTimeSeconds();
+	FeedbackPulse->SetVisibility(true);
+	SetActorTickEnabled(true);
+}
+
 // 新朝向的 Actor 已在终点，Pieces 从旧桥面位置绕轴转入，逻辑状态保持在终点。
 void AGridTile::AnimateDeckFrom(FVector Center, FVector Start, float Duration)
 {
@@ -246,7 +269,6 @@ TArray<UStaticMeshComponent*> AGridTile::AddPrintLink(const FVector& TargetOffse
 {
 	TArray<UStaticMeshComponent*> Meshes;
 	const float Height = 28.f + (Lane % 3) * 5.f;
-	const float SideGap = 72.f + (Lane % 3) * 24.f;
 	if (bSourceGuide)
 	{
 		// 虚线只说明机关从哪一格取色，不表示向该格送印。
@@ -262,42 +284,38 @@ TArray<UStaticMeshComponent*> AGridTile::AddPrintLink(const FVector& TargetOffse
 		}
 		return Meshes;
 	}
+	const TArray<FVector> Points = GridVisuals::PrintLinkPath(TargetOffset, Lane);
+	for (int32 Index = 0; Index < Points.Num() - 1; ++Index)
+	{
+		const FVector Delta = Points[Index + 1] - Points[Index];
+		Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
+			(Points[Index + 1] + Points[Index]) * .5f, FVector(Delta.Size() / 100.f,.025f,.020f),
+			FLinearColor(.26f,.64f,.73f), .75f, Delta.Rotation()));
+	}
+	const FVector FinalSegment = Points.Last() - Points.Last(1);
+	Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
+		FMath::Lerp(Points.Last(1), Points.Last(), .76f) + FVector(0,0,2), FVector(.10f,.10f,.22f),
+		FLinearColor(.50f,.88f,.92f), 1.f, FRotationMatrix::MakeFromZ(FinalSegment).Rotator()));
+	return Meshes;
+}
+
+TArray<FVector> GridVisuals::PrintLinkPath(FVector TargetOffset, int32 Lane)
+{
 	const bool bShortLink = TargetOffset.Size() <= 180.f;
 	const bool bAlongGrid = FMath::IsNearlyZero(TargetOffset.X) || FMath::IsNearlyZero(TargetOffset.Y);
-	if (bShortLink || bAlongGrid)
+	if (!bShortLink && !bAlongGrid)
 	{
-		// 邻格及沿整排石板的连线容易被遮住，改走侧边并抬高。
-		const FVector Direction = TargetOffset.GetSafeNormal();
-		const FVector Side = FVector::CrossProduct(Direction, FVector::UpVector);
-		TArray<FVector> Points;
-		Points.Add(Direction * 34.f + FVector(0,0,Height));
-		if (bShortLink) { Points.Add(TargetOffset * .5f + Side * SideGap + FVector(0,0,Height)); }
-		else
-		{
-			Points.Add(Points[0] + Side * SideGap);
-			Points.Add(TargetOffset - Direction * 34.f + Side * SideGap + FVector(0,0,Height));
-		}
-		Points.Add(TargetOffset - Direction * 34.f + FVector(0,0,Height));
-		for (int32 Index = 0; Index < Points.Num() - 1; ++Index)
-		{
-			const FVector Delta = Points[Index + 1] - Points[Index];
-			Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
-				(Points[Index + 1] + Points[Index]) * .5f, FVector(Delta.Size() / 100.f,.025f,.020f),
-				FLinearColor(.26f,.64f,.73f), .75f, Delta.Rotation()));
-		}
-		Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
-			FMath::Lerp(Points.Last(1), Points.Last(), .75f), FVector(.10f,.10f,.22f),
-			FLinearColor(.50f,.88f,.92f), 1.f, FRotationMatrix::MakeFromZ(Points.Last() - Points.Last(1)).Rotator()));
-		return Meshes;
+		const FVector Level(0,0,-12 + (Lane % 3) * 4.f);
+		return {Level, TargetOffset + Level};
 	}
-	Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cube,
-		TargetOffset * .5f + FVector(0,0,-12 + (Lane % 3) * 4.f), FVector(TargetOffset.Size() / 100.f,.017f,.018f),
-		FLinearColor(.14f,.41f,.51f), .42f, TargetOffset.Rotation()));
-	// 沿寄送方向放置箭头，长距离连线和双向回信也可分辨去向。
-	Meshes.Add(GridVisuals::Shape(*this, RootComponent, Material, EGridShape::Cone,
-		TargetOffset * .76f + FVector(0, 0, -10 + (Lane % 3) * 4.f), FVector(.10f, .10f, .22f),
-		FLinearColor(.38f, .76f, .83f), .8f, FRotationMatrix::MakeFromZ(TargetOffset).Rotator()));
-	return Meshes;
+	// 短连线绕开石板。传送光点复用这组转折坐标。
+	const FVector Level(0,0,28.f + (Lane % 3) * 5.f);
+	const FVector Direction = TargetOffset.GetSafeNormal();
+	const FVector Side = FVector::CrossProduct(Direction, FVector::UpVector) * (72.f + (Lane % 3) * 24.f);
+	const FVector Start = Direction * 34.f + Level;
+	const FVector End = TargetOffset - Direction * 34.f + Level;
+	if (bShortLink) { return {Start, TargetOffset * .5f + Side + Level, End}; }
+	return {Start, Start + Side, End + Side, End};
 }
 
 // 更新条件读数与连线高亮，显示桥当前还缺哪些角色或印记。
@@ -485,6 +503,7 @@ void AGridTile::Update(const FTileData& Data, bool bPulse)
 		for (UStaticMeshComponent* Print : OrangePrints) { Print->SetVisibility(bOrange); }
 		for (int32 Index = 0; Index < Countdown.Num(); ++Index)
 		{
+			Countdown[Index]->SetVisibility(!Data.bIsOccupied);
 			const bool bLive = Index < Data.RemainingMoves;
 			Paint(Countdown[Index], bLive ? FLinearColor(.96f,.68f,.32f) : DarkSeam, bLive ? 1.f : .05f);
 		}
@@ -544,6 +563,14 @@ void AGridTile::AnimateOutro(float Strength)
 void AGridTile::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (FeedbackPulse && FeedbackPulse->IsVisible())
+	{
+		const float Alpha = FMath::Clamp((GetWorld()->GetTimeSeconds() - FeedbackPulseStart) / .55f, 0.f, 1.f);
+		const float Scale = FMath::Lerp(.60f, .94f, Alpha);
+		FeedbackPulse->SetRelativeScale3D(FVector(Scale, Scale, .014f));
+		GridVisuals::Paint(FeedbackPulse, FLinearColor(.49f,.85f,.88f), 1.6f * (1.f - Alpha));
+		FeedbackPulse->SetVisibility(Alpha < 1.f && !TileData.bIsCollapsed && !TileData.bFoldedAway);
+	}
 	if (DeckDuration > 0.f)
 	{
 		DeckElapsed += DeltaSeconds;
@@ -625,7 +652,7 @@ void AGridTile::Tick(float DeltaSeconds)
 	}
 	// 转动、闪烁、寄印等待和回响动画结束后关闭 Tick，减少静止格子的逐帧开销。
 	SetActorTickEnabled(DeckDuration > 0.f || bLastStep || TileData.bPrintPending ||
-		(Ripple && Ripple->IsVisible()) || bEchoAvailable);
+		(Ripple && Ripple->IsVisible()) || (FeedbackPulse && FeedbackPulse->IsVisible()) || bEchoAvailable);
 }
 
 // 人物构造时只有层级，头、身体和围巾由 Setup 在运行时拼装。

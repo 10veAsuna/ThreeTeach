@@ -20,6 +20,7 @@ public:
 	void StartChapter(int32 Chapter, FIntPoint BoardSize, int32 BeatPeriod);
 	void SetMood(bool bQuiet, bool bCompleted);
 	void SetVolume(float Volume);
+	void SetCompletionDucked(bool bDucked);
 	void NotifyMove(EPlayerRole Mover, const FGridMove& Move, int32 MoveCount);
 	void CancelAccents();
 	void StopMusic();
@@ -29,15 +30,17 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 
 private:
-	void PlayPhrase(const std::vector<std::int16_t>& Data, float Gain = 1.f);
+	void PlayPhrase(const std::vector<std::int16_t>& Data);
+	float GetBedVolume() const;
 	void UpdateBedVolume();
 	UPROPERTY() TObjectPtr<UAudioComponent> BedAudio;
 	UPROPERTY() TObjectPtr<UGridPcmSoundWave> BedWave;
-	TArray<TWeakObjectPtr<UAudioComponent>> Accents;
+	TWeakObjectPtr<UAudioComponent> MoveAccent;
 	int32 ChapterIndex = INDEX_NONE;
 	FIntPoint GridSize = FIntPoint(2, 2);
 	float MusicVolume = .65f;
 	float MoodVolume = .55f;
+	bool bCompletionDucked = false;
 	int32 RhythmPeriod = 0;
 	double LastBorrowTime = -10;
 };

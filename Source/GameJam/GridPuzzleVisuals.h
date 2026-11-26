@@ -18,6 +18,7 @@ enum class EGridShape : uint8 { Cube, Cylinder, Cone, Sphere };
 namespace GridVisuals
 {
 	FLinearColor RoleColor(EPlayerRole Role);
+	TArray<FVector> PrintLinkPath(FVector TargetOffset, int32 Lane);
 	UStaticMeshComponent* Shape(AActor& Actor, USceneComponent* Parent, UMaterialInterface* Material,
 		EGridShape Type, FVector Position, FVector Scale, FLinearColor Color, float Glow = 0.f,
 		FRotator Rotation = FRotator::ZeroRotator);
@@ -37,6 +38,8 @@ public:
 	void Update(const FTileData& Data, bool bPulse);
 	void FaceMarker(const FRotator& Rotation);
 	void ShowActionMarker(const FText& Label, FColor Color);
+	void SetOpeningHighlight(bool bVisible);
+	void PulseTile();
 	void AnimateDeckFrom(FVector Center, FVector Start, float Duration);
 	void AddBridgeLink(const FVector& SourceOffset, UMaterialInterface* Material);
 	TArray<UStaticMeshComponent*> AddPrintLink(const FVector& TargetOffset, UMaterialInterface* Material, bool bSourceGuide = false, int32 Lane = 0);
@@ -71,6 +74,9 @@ private:
 	UPROPERTY() TObjectPtr<UTextRenderComponent> MarkerText;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> BridgeReadout;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> ActionMarker;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> OpeningHalo;
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> FeedbackPulse;
+	float FeedbackPulseStart = 0.f;
 	UPROPERTY() TObjectPtr<UTextRenderComponent> LinkBadge;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoMarker;
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> EchoHalo;

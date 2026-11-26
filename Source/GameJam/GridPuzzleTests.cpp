@@ -914,6 +914,27 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Completing every campaign level unlocks the all-clear achievement"),
 		Manager->IsAllClearAchievementUnlocked());
+	Manager->SeenMechanicIntros.Remove(0);
+	Manager->LoadLevel(0);
+	Manager->SetScreen(EGridScreen::Playing);
+	TestTrue(TEXT("Fresh players learn on the board with the first legal tile highlighted"),
+		Manager->GetScreen() == EGridScreen::Playing && Manager->OpeningHighlight == FIntPoint(2, 1));
+	Manager->Move(Right);
+	TestFalse(TEXT("The opening highlight clears once the tile is used"), Manager->OpeningHighlight.IsSet());
+	const FString BeforeConfirm = FGridTestSearch::StateKey(Manager->Rules);
+	Manager->RequestReset();
+	TestTrue(TEXT("Restarting a played board asks for confirmation"), Manager->GetScreen() == EGridScreen::Confirm);
+	Manager->CancelBoardChange();
+	TestEqual(TEXT("Cancel preserves the actual board and undo history"), FGridTestSearch::StateKey(Manager->Rules), BeforeConfirm);
+	TestTrue(TEXT("Cancel returns to the previous game screen"), Manager->GetScreen() == EGridScreen::Playing && Manager->HasUndoMove());
+	Manager->RequestReset();
+	Manager->ConfirmBoardChange();
+	TestEqual(TEXT("Confirming a restart returns to the start"), Manager->GetMoveCount(), 0);
+	TestTrue(TEXT("Restart preserves unlocked chapters and echoes"), Manager->IsAllClearAchievementUnlocked() && Manager->HasCurrentLevelEcho());
+	Manager->ShowPractice();
+	Manager->SelectLevel(Manager->GetCampaignLevelCount());
+	TestTrue(TEXT("Standalone practice opens a playable practice board"), Manager->IsPrototype() && Manager->GetScreen() == EGridScreen::Playing);
+	Manager->SeenMechanicIntros.Add(0);
 	Manager->LoadLevel(0);
 	Manager->SetScreen(EGridScreen::Playing);
 	World->GetTimerManager().Tick(0.f);
@@ -922,7 +943,7 @@ bool FGridChapterRuntimeTest::RunTest(const FString& Parameters)
 	const FText BeforeUnlockHint = Manager->GetLevelHint();
 	const FString BeforePreview = FGridTestSearch::StateKey(Manager->Rules);
 	Manager->RequestNextStep();
-	TestTrue(TEXT("F1 immediately offers a verified opening action"), Manager->StepHint.IsSet());
+	TestTrue(TEXT("The hint shortcut immediately offers a verified opening action"), Manager->StepHint.IsSet());
 	TestEqual(TEXT("Requesting a hint preserves the live board"), FGridTestSearch::StateKey(Manager->Rules), BeforePreview);
 	Manager->ToggleMovePreview();
 	TestFalse(TEXT("Movement preview replaces the old next-step hint"), Manager->StepHint.IsSet());

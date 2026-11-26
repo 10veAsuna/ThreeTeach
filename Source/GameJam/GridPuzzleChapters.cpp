@@ -278,7 +278,7 @@ TArray<UGridLevelDataAsset*> AGridManager::CreatePrototypeLevels()
 	};
 
 	UGridLevelDataAsset* Turn = Add(LOCTEXT("TurnPrototype", "转桥"),
-		LOCTEXT("TurnPrototypeHint", "先在桥上留下脚印，再离开桥面，到 TURN 处按 E。"),
+		LOCTEXT("TurnPrototypeHint", "先在桥上留脚印。两人都下桥后，到 TURN 按 E 看方向，再按一次转桥。"),
 		EGridPrototype::TurnBridge, {TEXT(""), TEXT("    x"), TEXT("  Aoo."), TEXT(" B"), TEXT(""), TEXT("  t"), TEXT("  b")});
 	// 同下标的两个坐标对应同一块石板，两个朝向共享被搬运的脚印状态。
 	Turn->InitialDeck = {{3, 2}, {4, 2}};
@@ -287,14 +287,14 @@ TArray<UGridLevelDataAsset*> AGridManager::CreatePrototypeLevels()
 	Turn->TurnPivot = {2, 2};
 
 	UGridLevelDataAsset* Record = Add(LOCTEXT("RecordPrototype", "录制与回放"),
-		LOCTEXT("RecordPrototypeHint", "A 到 REC 录三步。让开之后，再换 B 到 PLAY 回放。"),
+		LOCTEXT("RecordPrototypeHint", "A 到 REC 按 E，再走三步。等 A 让开，B 到 PLAY 照着走。"),
 		EGridPrototype::RecordRoute, {TEXT(""), TEXT("   a"), TEXT("   ob"), TEXT(" Aooo"), TEXT(" B")});
 	// 试玩共用 REC/PLAY 位置，正式关卡可以分别把它们放在两座岛上。
 	Record->RecordStart = Record->ReplayStart = {1, 3};
 	Record->ReplayTiles = {{2, 3}, {3, 3}, {3, 2}};
 
 	UGridLevelDataAsset* Exchange = Add(LOCTEXT("SwapPrototype", "换个位置"),
-		LOCTEXT("SwapPrototypeHint", "两个人分别走上 SWAP，按 E 看位置，再按 E 交换。"),
+		LOCTEXT("SwapPrototypeHint", "两人各踩上一块 SWAP。按 E 看换到哪格，再按一次交换位置。"),
 		EGridPrototype::SwapPlaces, {TEXT("bAouBa")});
 	Exchange->SwapTiles = {{2, 0}, {3, 0}};
 	Result.Append(CreateFusionLevels());

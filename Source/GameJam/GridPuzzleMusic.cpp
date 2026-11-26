@@ -8,6 +8,7 @@
 namespace
 {
 	constexpr float BackgroundGain = 1.4f;
+	constexpr float MoveAccentGain = .18f;
 	UGridPcmSoundWave* MakeMusicWave(UObject* Outer, const std::vector<std::int16_t>& Samples, bool bRepeat)
 	{
 		auto* Wave = NewObject<UGridPcmSoundWave>(Outer);
@@ -46,7 +47,7 @@ void UGridMusicComponent::StartChapter(int32 Chapter, FIntPoint BoardSize, int32
 	}
 	BedWave = MakeMusicWave(this, Loop, true);
 	BedWave->Priority = 2.f;
-	BedAudio = UGameplayStatics::CreateSound2D(this, BedWave, MusicVolume * MoodVolume * BackgroundGain, 1.f, 0.f, nullptr, false, false);
+	BedAudio = UGameplayStatics::CreateSound2D(this, BedWave, GetBedVolume(), 1.f, 0.f, nullptr, false, false);
 	if (BedAudio)
 	{
 		BedAudio->SetUISound(true);
@@ -70,8 +71,19 @@ void UGridMusicComponent::UpdateBedVolume()
 {
 	if (!BedAudio) { return; }
 	// AdjustVolume(..., 0) 会结束播放；用音量乘数静音，保留循环和播放位置。
-	BedAudio->SetVolumeMultiplier(MusicVolume * MoodVolume * BackgroundGain);
+	BedAudio->SetVolumeMultiplier(GetBedVolume());
 	if (MusicVolume > 0.f && !BedAudio->IsPlaying()) { BedAudio->Play(); }
+}
+
+float UGridMusicComponent::GetBedVolume() const
+{
+	return bCompletionDucked ? 0.f : MusicVolume * MoodVolume * BackgroundGain;
+}
+
+void UGridMusicComponent::SetCompletionDucked(bool bDucked)
+{
+	bCompletionDucked = bDucked;
+	UpdateBedVolume();
 }
 
 void UGridMusicComponent::SetMood(bool bQuiet, bool bCompleted)
@@ -88,58 +100,25 @@ void UGridMusicComponent::SetVolume(float Volume)
 	if (MusicVolume == 0.f) { CancelAccents(); }
 }
 
-void UGridMusicComponent::PlayPhrase(const std::vector<std::int16_t>& Data, float Gain)
+void UGridMusicComponent::PlayPhrase(const std::vector<std::int16_t>& Data)
 {
-	if (MusicVolume == 0.f || !BedAudio || Data.empty()) { return; }
-	Accents.RemoveAll([](const TWeakObjectPtr<UAudioComponent>& Accent)
-	{
-		return !Accent.IsValid() || !Accent->IsPlaying();
-	});
-	// 多端寄印合并为短乐句，快速移动时也限制同时发声的装饰层数。
-	if (Accents.Num() >= 4)
-	{
-		if (Accents[0].IsValid()) { Accents[0]->Stop(); }
-		Accents.RemoveAt(0);
-	}
 	auto* Wave = MakeMusicWave(this, Data, false);
-	if (UAudioComponent* Accent = UGameplayStatics::SpawnSound2D(this, Wave, MusicVolume * Gain))
+	if (UAudioComponent* Accent = UGameplayStatics::SpawnSound2D(this, Wave, MusicVolume * MoveAccentGain))
 	{
-		Accent->SetUISound(false);
-		Accents.Add(Accent);
+		if (UAudioComponent* Previous = MoveAccent.Get()) { Previous->FadeOut(.025f, 0.f); }
+		MoveAccent = Accent;
 	}
 }
 
 void UGridMusicComponent::NotifyMove(EPlayerRole Mover, const FGridMove& Move, int32 MoveCount)
 {
-	if (!BedAudio || MusicVolume == 0.f || Move.bReachedGoal) { return; }
-	const bool bBlue = Mover == EPlayerRole::PlayerA;
-	if (Move.bRecordedStep || Move.bReplayStep)
-	{
-		const FIntPoint Direction = Move.Path.IsEmpty() ? Move.To - Move.From : Move.Path[0] - Move.From;
-		const int32 Pitch = Direction.X > 0 ? 77 : Direction.X < 0 ? 72 : Direction.Y < 0 ? 74 : 81;
-		GridMusic::Score Notes;
-		GridMusic::Add(Notes, 0, .65, Pitch - (bBlue ? 0 : 12), .19f,
-			bBlue ? -.35f : .35f, bBlue ? GridMusic::Voice::Bell : GridMusic::Voice::Wood);
-		PlayPhrase(GridMusic::Render(Notes, 1.1));
-	}
-	else if (Move.FreshBorrowedPrintCount > 0 && FPlatformTime::Seconds() - LastBorrowTime > .28)
-	{
-		LastBorrowTime = FPlatformTime::Seconds();
-		PlayPhrase(GridMusic::Render(GridMusic::Borrow(bBlue), 1.35));
-	}
+	if (!BedAudio || MusicVolume == 0.f || bCompletionDucked || Move.bReachedGoal) { return; }
 	const auto Pan = [this](FIntPoint Position)
 	{
-		// 对应等距摄像机的屏幕横向；南北寄印也会在立体声中移动。
 		const float Span = .971f * (GridSize.X - 1) + .238f * (GridSize.Y - 1);
-		const float ScreenX = .971f * Position.X + .238f * Position.Y;
-		return FMath::Clamp(ScreenX / Span * 1.4f - .7f, -.7f, .7f);
+		return FMath::Clamp((.971f * Position.X + .238f * Position.Y) / Span * 1.4f - .7f, -.7f, .7f);
 	};
-	if (!Move.PrintDispatches.IsEmpty())
-	{
-		const auto& Print = Move.PrintDispatches[0];
-		PlayPhrase(GridMusic::Render(GridMusic::Transfer(Print.Owner == EFootprintOwner::PlayerA,
-			Pan(Print.From), Pan(Print.To), false), 1.05));
-	}
+	// Prefer a delayed arrival, then a directional cue, then the quieter movement details.
 	for (const auto& Print : Move.PrintArrivals)
 	{
 		const bool bImmediate = Move.PrintDispatches.ContainsByPredicate([&Print](const FGridPrintTransfer& Sent)
@@ -150,10 +129,31 @@ void UGridMusicComponent::NotifyMove(EPlayerRole Mover, const FGridMove& Move, i
 		{
 			PlayPhrase(GridMusic::Render(GridMusic::Transfer(Print.Owner == EFootprintOwner::PlayerA,
 				Pan(Print.From), Pan(Print.To), true), 1.3));
-			break;
+			return;
 		}
 	}
-	if (RhythmPeriod > 0)
+	const bool bBlue = Mover == EPlayerRole::PlayerA;
+	if (Move.bRecordedStep || Move.bReplayStep)
+	{
+		const FIntPoint Direction = Move.Path.IsEmpty() ? Move.To - Move.From : Move.Path[0] - Move.From;
+		const int32 Pitch = Direction.X > 0 ? 77 : Direction.X < 0 ? 72 : Direction.Y < 0 ? 74 : 81;
+		GridMusic::Score Notes;
+		GridMusic::Add(Notes, 0, .34, Pitch - (bBlue ? 0 : 12), .19f,
+			bBlue ? -.35f : .35f, bBlue ? GridMusic::Voice::Bell : GridMusic::Voice::Wood);
+		PlayPhrase(GridMusic::Render(Notes, .65));
+	}
+	else if (!Move.PrintDispatches.IsEmpty())
+	{
+		const auto& Print = Move.PrintDispatches[0];
+		PlayPhrase(GridMusic::Render(GridMusic::Transfer(Print.Owner == EFootprintOwner::PlayerA,
+			Pan(Print.From), Pan(Print.To), false), 1.05));
+	}
+	else if (Move.FreshBorrowedPrintCount > 0 && FPlatformTime::Seconds() - LastBorrowTime > .28)
+	{
+		LastBorrowTime = FPlatformTime::Seconds();
+		PlayPhrase(GridMusic::Render(GridMusic::Borrow(bBlue), 1.35));
+	}
+	else if (RhythmPeriod > 0)
 	{
 		GridMusic::Score Beat;
 		const int32 Landings = FMath::Max(1, Move.Path.Num());
@@ -168,11 +168,8 @@ void UGridMusicComponent::NotifyMove(EPlayerRole Mover, const FGridMove& Move, i
 
 void UGridMusicComponent::CancelAccents()
 {
-	for (const auto& Accent : Accents)
-	{
-		if (Accent.IsValid()) { Accent->Stop(); }
-	}
-	Accents.Reset();
+	if (UAudioComponent* Accent = MoveAccent.Get()) { Accent->Stop(); }
+	MoveAccent.Reset();
 	LastBorrowTime = -10;
 }
 
